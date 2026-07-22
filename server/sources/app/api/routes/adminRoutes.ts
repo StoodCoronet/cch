@@ -147,14 +147,17 @@ export function adminRoutes(app: Fastify) {
         return reply.send({ success: true });
     });
 
-    // Admin dashboard — static files, avoiding template literal escaping issues
+    // Static files for admin and user dashboards
     app.get('/admin', async (_request, reply) => {
-        const html = readFileSync(process.cwd() + "/admin.html", "utf-8");
-        reply.type('text/html').send(html);
+        reply.type('text/html').send(readFileSync(process.cwd() + "/admin.html", "utf-8"));
     });
-
     app.get('/admin.js', async (_request, reply) => {
-        const js = readFileSync(process.cwd() + "/admin.js", "utf-8");
-        reply.type('application/javascript').send(js);
+        reply.type('application/javascript').send(readFileSync(process.cwd() + "/admin.js", "utf-8"));
+    });
+    app.get('/', async (_request, reply) => {
+        reply.type('text/html').send(readFileSync(process.cwd() + "/user.html", "utf-8"));
+    });
+    app.get('/user.js', async (_request, reply) => {
+        reply.type('application/javascript').send(readFileSync(process.cwd() + "/user.js", "utf-8"));
     });
 }
