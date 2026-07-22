@@ -24,8 +24,8 @@
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "pnpm run typecheck && node scripts/build-runtime.cjs",
-    "build:runtime": "node scripts/build-runtime.cjs",
+    "build": "pnpm run typecheck",
+    "build:runtime": "echo 'skipped — runtime uses tsx'",
 
     "build:standalone": "bun build ./sources/standalone.ts --compile --outfile dist/cch-server --target bun && find ../../node_modules/@electric-sql/pglite/dist -name 'pglite.wasm' -exec cp {} dist/ \\; && find ../../node_modules/@electric-sql/pglite/dist -name 'pglite.data' -exec cp {} dist/ \\; && cp -r prisma/migrations dist/prisma/migrations",
     "start": "tsx ./sources/main.ts",
