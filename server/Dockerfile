@@ -20,6 +20,11 @@ COPY packages/wire/package.json packages/wire/
 
 COPY server/prisma server/prisma
 
+ENV PRISMA_BINARIES_MIRROR=https://registry.npmmirror.com/-/binary/prisma
+# Prisma engine mirror for China
+ENV PRISMA_ENGINES_MIRROR=https://registry.npmmirror.com/-/binary/prisma
+ENV PRISMA_BINARIES_MIRROR=https://registry.npmmirror.com/-/binary/prisma
+
 RUN SKIP_HAPPY_WIRE_BUILD=1 pnpm install --no-frozen-lockfile
 
 # Stage 2: build
