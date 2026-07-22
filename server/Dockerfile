@@ -20,7 +20,7 @@ COPY packages/wire/package.json packages/wire/
 
 COPY server/prisma server/prisma
 
-RUN SKIP_HAPPY_WIRE_BUILD=1 pnpm install --frozen-lockfile
+RUN SKIP_HAPPY_WIRE_BUILD=1 pnpm install --no-frozen-lockfile
 
 # Stage 2: build
 FROM deps AS builder
