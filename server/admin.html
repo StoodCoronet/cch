@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CCH Server Admin</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;background:#0f1117;color:#e1e4e8;max-width:900px;margin:0 auto;padding:24px 16px}
+h1{font-size:22px;margin-bottom:8px}
+h2{font-size:16px;margin:24px 0 12px;color:#8b949e;text-transform:uppercase;letter-spacing:.5px}
+input,button,select{font-size:14px;padding:8px 12px;border-radius:6px;border:1px solid #30363d;background:#161b22;color:#e1e4e8}
+button{cursor:pointer;background:#238636;border-color:#238636;font-weight:600}
+button:hover{background:#2ea043}
+button.danger{background:#da3633;border-color:#da3633}
+button.danger:hover{background:#f85149}
+button.small{font-size:12px;padding:4px 8px}
+.row{display:flex;gap:8px;margin-bottom:12px;align-items:center}
+.grow{flex:1}
+.card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px;margin-bottom:16px}
+.token-box{background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:12px;font-family:monospace;font-size:13px;word-break:break-all;margin:8px 0}
+.conn-box{background:#0d1117;border:1px solid #238636;border-radius:6px;padding:12px;font-family:monospace;font-size:13px;word-break:break-all;color:#7ee787;margin:8px 0}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid #21262d}
+th{color:#8b949e;font-weight:600}
+.badge{display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600}
+.badge-active{background:#238636;color:#fff}
+.badge-revoked{background:#30363d;color:#8b949e}
+.hidden{display:none!important}
+.error{color:#f85149;font-size:13px;margin-top:4px}
+#login-screen{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:60vh}
+#login-screen .card{width:100%;max-width:360px}
+</style>
+</head>
+<body>
+<div id="login-screen">
+    <div class="card">
+        <h1>CCH Server Admin</h1>
+        <div class="row" style="margin-top:16px">
+            <input id="password-input" type="password" placeholder="Admin password" class="grow">
+            <button id="login-btn">Login</button>
+        </div>
+        <p class="error" id="login-error"></p>
+    </div>
+</div>
+<div id="main-screen" class="hidden">
+    <h1>CCH Server Admin</h1>
+    <div class="row">
+        <span style="color:#8b949e">Server:</span>
+        <span id="server-url-display"></span>
+    </div>
+
+    <h2>Accounts</h2>
+    <div class="card">
+        <div class="row">
+            <input id="new-account-name" type="text" placeholder="Username" class="grow">
+            <button id="create-account-btn">Create Account</button>
+        </div>
+        <p class="error" id="account-error"></p>
+        <table id="accounts-table" style="margin-top:12px">
+            <thead><tr><th>Username</th><th>Sessions</th><th>Created</th><th></th></tr></thead>
+            <tbody id="accounts-tbody"></tbody>
+        </table>
+    </div>
+
+    <h2>Bootstrap Tokens</h2>
+    <div class="card">
+        <div class="row">
+            <select id="token-account-select" class="grow"><option value="">Select an account...</option></select>
+            <input id="token-label" type="text" placeholder="Label (optional)" style="width:180px">
+            <button id="generate-token-btn">Generate Token</button>
+        </div>
+        <p class="error" id="token-error"></p>
+        <div id="new-token-display" class="hidden" style="margin-top:12px">
+            <p style="color:#7ee787;font-weight:600">Token created. Save it now.</p>
+            <div class="token-box" id="new-token-value"></div>
+            <p style="color:#8b949e;margin-top:8px">Connection string (copy and paste into cch):</p>
+            <div class="conn-box" id="new-conn-string"></div>
+            <button id="copy-conn-btn" class="small" style="margin-top:8px">Copy Connection String</button>
+        </div>
+        <table id="tokens-table" style="margin-top:12px">
+            <thead><tr><th>Label</th><th>Created</th><th>Status</th><th></th></tr></thead>
+            <tbody id="tokens-tbody"></tbody>
+        </table>
+        <p style="color:#8b949e;font-size:12px;margin-top:8px">Tokens: <span id="selected-account-label">&mdash;</span></p>
+    </div>
+</div>
+<script src="/admin.js"></script>
+</body>
+</html>
