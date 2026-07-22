@@ -126,9 +126,11 @@ function createAccount() {
 
 function generateToken() {
     var accountId = $("token-account-select").value;
-    var label = $("token-label").value.trim() || null;
+    var label = $("token-label").value.trim();
     if (!accountId) { setError("token-error", "Select an account first"); return; }
-    api("POST", "/v1/admin/bootstrap-tokens", { accountId: accountId, label: label }).then(function(data) {
+    var body = { accountId: accountId };
+    if (label) body.label = label;
+    api("POST", "/v1/admin/bootstrap-tokens", body).then(function(data) {
         $("new-token-value").textContent = data.token;
         $("new-conn-string").textContent = srv + "/connect?token=" + data.token;
         $("new-token-display").classList.remove("hidden");
