@@ -23,10 +23,7 @@ COPY packages/wire/package.json packages/wire/
 
 COPY server/prisma server/prisma
 
-# Use Chinese mirrors for npm and Prisma
-RUN pnpm config set registry https://registry.npmmirror.com
 ENV PRISMA_ENGINES_MIRROR=https://registry.npmmirror.com/-/binary/prisma
-ENV PRISMA_BINARIES_MIRROR=https://registry.npmmirror.com/-/binary/prisma
 
 RUN SKIP_HAPPY_WIRE_BUILD=1 pnpm install --no-frozen-lockfile
 
