@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CCH</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;background:#0f1117;color:#e1e4e8;max-width:700px;margin:0 auto;padding:32px 16px}
+h1{font-size:22px;margin-bottom:4px}
+h2{font-size:14px;color:#8b949e;text-transform:uppercase;letter-spacing:.5px;margin:24px 0 12px}
+input,button{font-size:14px;padding:10px 14px;border-radius:6px;border:1px solid #30363d;background:#161b22;color:#e1e4e8}
+button{cursor:pointer;background:#238636;border-color:#238636;font-weight:600}
+button:hover{background:#2ea043}
+button.small{font-size:12px;padding:4px 10px}
+.card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px;margin-bottom:16px}
+.row{display:flex;gap:8px;margin-bottom:12px;align-items:center}
+.grow{flex:1}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid #21262d}
+th{color:#8b949e;font-weight:600}
+.badge{display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600}
+.badge-active{background:#238636;color:#fff}
+.badge-off{background:#30363d;color:#8b949e}
+.hidden{display:none!important}
+.error{color:#f85149;font-size:13px;margin-top:4px}
+.sub{font-size:12px;color:#8b949e}
+#connect-screen{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:50vh}
+#connect-screen .card{width:100%;max-width:420px}
+</style>
+</head>
+<body>
+<div id="connect-screen">
+    <div class="card">
+        <h1>CCH</h1>
+        <p class="sub" style="margin-bottom:16px">Connect to your self-host server</p>
+        <div class="row">
+            <input id="connect-input" type="text" placeholder="Paste connection string or token..." class="grow">
+        </div>
+        <button id="connect-btn" style="width:100%">Connect</button>
+        <p class="error" id="connect-error"></p>
+        <p class="sub" style="margin-top:8px">Get your connection string from the admin panel</p>
+    </div>
+</div>
+<div id="dashboard-screen" class="hidden">
+    <div class="row">
+        <h1 class="grow">CCH Dashboard</h1>
+        <button class="small" id="refresh-btn">Refresh</button>
+    </div>
+    <p class="sub">Account: <span id="account-display">—</span></p>
+
+    <h2>Sessions <span class="sub" id="session-count"></span></h2>
+    <div class="card">
+        <table id="sessions-table">
+            <thead><tr><th>Session</th><th>Status</th><th>Last Active</th><th>Created</th></tr></thead>
+            <tbody id="sessions-tbody"></tbody>
+        </table>
+        <p class="sub" id="sessions-empty" style="margin-top:8px">No active sessions</p>
+    </div>
+
+    <h2>Machines</h2>
+    <div class="card">
+        <table id="machines-table">
+            <thead><tr><th>Machine</th><th>Status</th><th>Last Seen</th></tr></thead>
+            <tbody id="machines-tbody"></tbody>
+        </table>
+        <p class="sub" id="machines-empty" style="margin-top:8px">No machines connected</p>
+    </div>
+
+    <div style="margin-top:24px;text-align:center">
+        <button class="small" id="disconnect-btn" style="background:#30363d;border-color:#30363d">Disconnect</button>
+    </div>
+</div>
+<script src="/user.js"></script>
+</body>
+</html>

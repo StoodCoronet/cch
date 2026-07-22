@@ -59,14 +59,6 @@ export async function startApi(opts: StartApiOptions = {}) {
         (_req, body, done) => done(null, body),
     );
 
-    // Root handler — when not serving a static webapp, return a banner.
-    // When serving a static webapp, @fastify/static handles `/` via its index.
-    if (!opts.staticDir) {
-        app.get('/', function (request, reply) {
-            reply.send('Welcome to Happy Server!');
-        });
-    }
-
     // Create typed provider
     app.setValidatorCompiler(validatorCompiler);
     app.setSerializerCompiler(serializerCompiler);
