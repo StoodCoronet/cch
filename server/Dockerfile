@@ -59,4 +59,4 @@ EXPOSE 3005
 
 WORKDIR /repo/server
 
-CMD ["sh", "-c", "../node_modules/.bin/tsx sources/standalone.ts migrate && exec ../node_modules/.bin/tsx sources/standalone.ts serve"]
+CMD ["sh", "-c", "../node_modules/.bin/tsx sources/standalone.ts migrate && ../node_modules/.bin/tsx sources/init.ts && exec ../node_modules/.bin/tsx sources/standalone.ts serve"]
