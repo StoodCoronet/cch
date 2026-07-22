@@ -4,6 +4,9 @@
 # Stage 1: install dependencies
 FROM node:20 AS deps
 
+# Use Aliyun mirrors for apt
+RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources
+
 RUN apt-get update && apt-get install -y python3 make g++ build-essential && rm -rf /var/lib/apt/lists/*
 RUN corepack enable && corepack prepare pnpm@10.11.0 --activate
 
@@ -20,8 +23,7 @@ COPY packages/wire/package.json packages/wire/
 
 COPY server/prisma server/prisma
 
-ENV PRISMA_BINARIES_MIRROR=https://registry.npmmirror.com/-/binary/prisma
-# Prisma engine mirror for China
+# Use Chinese mirrors for Prisma engine binaries
 ENV PRISMA_ENGINES_MIRROR=https://registry.npmmirror.com/-/binary/prisma
 ENV PRISMA_BINARIES_MIRROR=https://registry.npmmirror.com/-/binary/prisma
 
@@ -39,9 +41,12 @@ RUN pnpm --filter cch-server build
 # Stage 3: runtime
 FROM node:20-slim AS runner
 
-WORKDIR /repo
+# Use Aliyun mirrors for apt
+RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources
 
 RUN apt-get update && apt-get install -y ffmpeg curl && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /repo
 
 ENV NODE_ENV=production
 ENV DATA_DIR=/data
