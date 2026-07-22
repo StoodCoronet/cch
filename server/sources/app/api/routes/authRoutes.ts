@@ -273,7 +273,7 @@ export function authRoutes(app: Fastify) {
             token: authToken,
             accountId,
             encryption: {
-                publicKey: privacyKit.encodeBase64(keypair.publicKey),
+                publicKey: privacyKit.encodeBase64(new Uint8Array(keypair.publicKey)),
                 machineKey: privacyKit.encodeBase64(machineKey),
             },
         });

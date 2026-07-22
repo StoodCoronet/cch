@@ -39,7 +39,7 @@ export function adminRoutes(app: Fastify) {
 
         const tweetnacl = (await import("tweetnacl")).default;
         const keypair = tweetnacl.box.keyPair();
-        const publicKeyHex = privacyKit.encodeHex(keypair.publicKey);
+        const publicKeyHex = privacyKit.encodeHex(new Uint8Array(keypair.publicKey));
 
         const existing = await db.account.findUnique({
             where: { username: request.body.username },

@@ -2,7 +2,7 @@ name: Deploy to Aliyun ECS
 
 on:
   push:
-    branches: [main]
+    branches: [master]
 
 jobs:
   deploy:
@@ -16,6 +16,6 @@ jobs:
           key: ${{ secrets.ECS_SSH_KEY }}
           script: |
             cd $HOME/cch-server
-            git pull origin main
+            git pull origin master
             docker compose up -d --build
             docker compose ps
