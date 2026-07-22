@@ -6,15 +6,18 @@
 <title>CCH</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:system-ui,sans-serif;background:#0f1117;color:#e1e4e8;max-width:700px;margin:0 auto;padding:32px 16px}
+body{font-family:system-ui,sans-serif;background:#0f1117;color:#e1e4e8;max-width:720px;margin:0 auto;padding:32px 16px}
 h1{font-size:22px;margin-bottom:4px}
 h2{font-size:14px;color:#8b949e;text-transform:uppercase;letter-spacing:.5px;margin:24px 0 12px}
-input,button{font-size:14px;padding:10px 14px;border-radius:6px;border:1px solid #30363d;background:#161b22;color:#e1e4e8}
+input,button,select{font-size:14px;padding:10px 14px;border-radius:6px;border:1px solid #30363d;background:#161b22;color:#e1e4e8}
 button{cursor:pointer;background:#238636;border-color:#238636;font-weight:600}
 button:hover{background:#2ea043}
+button.sec{background:#30363d;border-color:#30363d}
+button.sec:hover{background:#484f58}
+button.danger{background:#da3633;border-color:#da3633}
 button.small{font-size:12px;padding:4px 10px}
-.card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px;margin-bottom:16px}
-.row{display:flex;gap:8px;margin-bottom:12px;align-items:center}
+.card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:20px;margin-bottom:16px}
+.row{display:flex;gap:8px;margin-bottom:10px;align-items:center}
 .grow{flex:1}
 table{width:100%;border-collapse:collapse;font-size:13px}
 th,td{text-align:left;padding:8px 12px;border-bottom:1px solid #21262d}
@@ -24,53 +27,81 @@ th{color:#8b949e;font-weight:600}
 .badge-off{background:#30363d;color:#8b949e}
 .hidden{display:none!important}
 .error{color:#f85149;font-size:13px;margin-top:4px}
+.success{color:#7ee787;font-size:13px;margin-top:4px}
 .sub{font-size:12px;color:#8b949e}
+.code{font-family:monospace;background:#0d1117;padding:2px 6px;border-radius:4px;font-size:12px;word-break:break-all}
+.token-box{font-family:monospace;font-size:13px;background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:12px;word-break:break-all;margin:8px 0}
+.conn-box{font-family:monospace;font-size:13px;background:#0d1117;border:1px solid #238636;border-radius:6px;padding:12px;word-break:break-all;color:#7ee787;margin:8px 0}
 #connect-screen{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:50vh}
-#connect-screen .card{width:100%;max-width:420px}
+#connect-screen .card{width:100%;max-width:440px}
+.info-box{background:#161b22;border:1px solid #30363d;border-radius:6px;padding:12px;font-size:13px;color:#8b949e;margin-bottom:16px}
+.info-box code{color:#e1e4e8}
 </style>
 </head>
 <body>
+
 <div id="connect-screen">
     <div class="card">
         <h1>CCH</h1>
-        <p class="sub" style="margin-bottom:16px">Connect to your self-host server</p>
+        <p class="sub" style="margin-bottom:16px">Connect to your server to monitor sessions</p>
         <div class="row">
-            <input id="connect-input" type="text" placeholder="Paste connection string or token..." class="grow">
+            <input id="connect-input" type="text" placeholder="Paste connection string or token..." class="grow" autofocus>
         </div>
         <button id="connect-btn" style="width:100%">Connect</button>
         <p class="error" id="connect-error"></p>
-        <p class="sub" style="margin-top:8px">Get your connection string from the admin panel</p>
     </div>
 </div>
+
 <div id="dashboard-screen" class="hidden">
     <div class="row">
-        <h1 class="grow">CCH Dashboard</h1>
-        <button class="small" id="refresh-btn">Refresh</button>
+        <h1 class="grow">CCH</h1>
+        <div>
+            <button id="refresh-btn" class="sec small">Refresh</button>
+            <button id="logout-btn" class="sec small" style="margin-left:4px">Logout</button>
+        </div>
     </div>
-    <p class="sub">Account: <span id="account-display">—</span></p>
+    <p class="sub">Account <code id="account-id-display"></code></p>
 
-    <h2>Sessions <span class="sub" id="session-count"></span></h2>
+    <h2>Sessions <span class="sub" id="session-count">(0)</span></h2>
     <div class="card">
-        <table id="sessions-table">
+        <div id="sessions-empty" class="sub" style="text-align:center;padding:24px">No active sessions yet.<br>Run <code>cch run</code> on your machine to start one.</div>
+        <table id="sessions-table" class="hidden">
             <thead><tr><th>Session</th><th>Status</th><th>Last Active</th><th>Created</th></tr></thead>
             <tbody id="sessions-tbody"></tbody>
         </table>
-        <p class="sub" id="sessions-empty" style="margin-top:8px">No active sessions</p>
     </div>
 
-    <h2>Machines</h2>
+    <h2>Machines <span class="sub" id="machine-count">(0)</span></h2>
     <div class="card">
-        <table id="machines-table">
+        <div id="machines-empty" class="sub" style="text-align:center;padding:24px">No machines connected yet.</div>
+        <table id="machines-table" class="hidden">
             <thead><tr><th>Machine</th><th>Status</th><th>Last Seen</th></tr></thead>
             <tbody id="machines-tbody"></tbody>
         </table>
-        <p class="sub" id="machines-empty" style="margin-top:8px">No machines connected</p>
     </div>
 
-    <div style="margin-top:24px;text-align:center">
-        <button class="small" id="disconnect-btn" style="background:#30363d;border-color:#30363d">Disconnect</button>
+    <h2>Connect a Device</h2>
+    <div class="card">
+        <div class="row">
+            <input id="token-label-input" type="text" placeholder="Label, e.g. macbook-pro" class="grow">
+            <button id="gen-token-btn">Generate Token</button>
+        </div>
+        <p class="error" id="gen-token-error"></p>
+        <div id="new-token-area" class="hidden" style="margin-top:12px">
+            <p class="success">Token generated. Copy the connection string:</p>
+            <div class="conn-box" id="new-conn-str"></div>
+            <button id="copy-token-btn" class="small" style="margin-top:8px">Copy</button>
+            <p class="sub" style="margin-top:4px">Run on the target machine: <code>cch happy --connect "&lt;paste&gt;"</code></p>
+        </div>
+        <div id="tokens-table-area" style="margin-top:16px">
+            <table id="tokens-table" class="hidden">
+                <thead><tr><th>Label</th><th>Created</th><th>Status</th><th></th></tr></thead>
+                <tbody id="tokens-tbody"></tbody>
+            </table>
+        </div>
     </div>
 </div>
+
 <script src="/user.js"></script>
 </body>
 </html>

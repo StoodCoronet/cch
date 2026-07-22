@@ -147,6 +147,38 @@ export function adminRoutes(app: Fastify) {
         return reply.send({ success: true });
     });
 
+    // --- User-scoped token management (auth via privacy-kit token) ---
+
+    app.post('/v1/bootstrap-tokens', {
+        preHandler: app.authenticate,
+        schema: { body: z.object({ label: z.string().optional() }) },
+    }, async (request, reply) => {
+        const result = await createBootstrapToken({
+            accountId: request.userId,
+            label: request.body.label,
+        });
+        return reply.send({
+            token: result.plaintext,
+            record: { id: result.record.id, label: result.record.label, createdAt: result.record.createdAt },
+        });
+    });
+
+    app.get('/v1/bootstrap-tokens', {
+        preHandler: app.authenticate,
+    }, async (request, reply) => {
+        const tokens = await listBootstrapTokens(request.userId);
+        return reply.send({ tokens });
+    });
+
+    app.post('/v1/bootstrap-tokens/:id/revoke', {
+        preHandler: app.authenticate,
+        schema: { params: z.object({ id: z.string() }) },
+    }, async (request, reply) => {
+        const success = await revokeBootstrapToken(request.params.id);
+        if (!success) return reply.code(404).send({ error: 'Token not found' });
+        return reply.send({ success: true });
+    });
+
     // Static files for admin and user dashboards
     app.get('/admin', async (_request, reply) => {
         reply.type('text/html').send(readFileSync(process.cwd() + "/admin.html", "utf-8"));
