@@ -1,0 +1,40 @@
+{
+  "env": {
+    "RUST_LOG": "debug",
+    "RUST_BACKTRACE": "1"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(cargo:*)",
+      "Bash(bats:*)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path // empty' | { read -r f; [[ \"$f\" == *.rs ]] || exit 0; cargo clippy 2>&1; [[ $? -ne 0 ]] && exit 2 || exit 0; }",
+            "timeout": 60,
+            "statusMessage": "Checking with clippy...",
+            "asyncRewake": true
+          },
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path // empty' | { read -r f; [[ \"$f\" == *.rs ]] || exit 0; cargo test 2>&1; [[ $? -ne 0 ]] && exit 2 || exit 0; }",
+            "timeout": 120,
+            "statusMessage": "Running tests...",
+            "asyncRewake": true
+          }
+        ]
+      }
+    ]
+  },
+  "enabledPlugins": {
+    "meta@alex-marketplace": true,
+    "lb-env@alex-marketplace": true,
+    "lb-dev@alex-marketplace": true
+  }
+}

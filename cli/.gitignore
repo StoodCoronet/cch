@@ -1,0 +1,9 @@
+/target
+.claude/prompt-counter.txt
+*.mp4
+.agent/
+.agents/
+skills-lock.json
+.DS_Store
+.env
+docs/references/cc-switch

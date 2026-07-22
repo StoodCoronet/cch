@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Build output
+cli/target/
+server/dist/
+packages/wire/dist/
+
+# Environment (contains secrets)
+.env
+server/.env
+
+# PGlite data
+server/data/
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db

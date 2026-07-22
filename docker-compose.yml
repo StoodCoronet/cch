@@ -1,0 +1,17 @@
+services:
+  cch-server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    ports:
+      - "3005:3005"
+    environment:
+      - HANDY_MASTER_SECRET=${HANDY_MASTER_SECRET}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - PORT=3005
+    volumes:
+      - cch-data:/data
+    restart: unless-stopped
+
+volumes:
+  cch-data:

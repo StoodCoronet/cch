@@ -1,0 +1,11 @@
+{
+  "name": "cch",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hosted Claude Code with happy — server, CLI, and mobile app",
+  "scripts": {
+    "server:dev": "pnpm --filter cch-server standalone:dev",
+    "server:build": "pnpm --filter cch-server build",
+    "wire:build": "pnpm --filter @cch/wire build"
+  }
+}
