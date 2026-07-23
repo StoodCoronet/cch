@@ -54,31 +54,6 @@ fn heartbeat(server: &str, auth_token: &str, machine: &str) {
     }
 }
 
-fn run_daemon() -> Result<()> {
-    let hc = config::load_happy_config()
-        .context("Not connected. Run 'cch connect <url>' first.")?;
-
-    let auth = match fs::read_to_string(token_cache_path()) {
-        Ok(t) if t.starts_with(&hc.server) => {
-            t.split('|').nth(1).unwrap_or("").trim().to_string()
-        }
-        _ => {
-            let tok = bootstrap(&hc.server, &hc.token)?;
-            let _ = fs::create_dir_all(token_cache_path().parent().unwrap());
-            let _ = fs::write(token_cache_path(), format!("{}|{}", hc.server, tok));
-            tok
-        }
-    };
-
-    let machine = hostname();
-    println!("ccd daemon started. Machine: {machine}");
-
-    loop {
-        heartbeat(&hc.server, &auth, &machine);
-        thread::sleep(Duration::from_secs(30));
-    }
-}
-
 fn start() -> Result<()> {
     let pid_path = pid_file();
     if pid_path.exists() {
@@ -124,33 +99,76 @@ fn stop() -> Result<()> {
 }
 
 fn status() -> Result<()> {
+    // Show server config
+    match config::load_happy_config() {
+        Some(hc) => {
+            let masked = if hc.token.len() > 8 {
+                format!("{}...{}", &hc.token[..4], &hc.token[hc.token.len() - 4..])
+            } else {
+                "****".to_string()
+            };
+            println!("Server: {}", hc.server);
+            println!("Token:  {masked}");
+        }
+        None => println!("Server: not configured"),
+    }
+
+    // Show daemon process status
     let pid_path = pid_file();
     if !pid_path.exists() {
-        println!("ccd: not running");
+        println!("Daemon: not running");
+        println!("Run 'ccd start' to start.");
         return Ok(());
     }
     let pid = fs::read_to_string(&pid_path).unwrap_or_default().trim().to_string();
     let running = Command::new("kill").arg("-0").arg(&pid).status().map(|s| s.success()).unwrap_or(false);
     if running {
-        println!("ccd: running (PID: {pid})");
+        println!("Daemon: running (PID: {pid})");
+        println!("Machine: {}", hostname());
     } else {
-        println!("ccd: stale PID file (process not found)");
+        println!("Daemon: stopped (stale PID)");
         let _ = fs::remove_file(&pid_path);
     }
     Ok(())
 }
+
+fn run_daemon() -> Result<()> {
+    let hc = config::load_happy_config()
+        .context("Not connected. Run 'ccd connect <url>' first.")?;
+
+    let auth = match fs::read_to_string(token_cache_path()) {
+        Ok(t) if t.starts_with(&hc.server) => {
+            t.split('|').nth(1).unwrap_or("").trim().to_string()
+        }
+        _ => {
+            let tok = bootstrap(&hc.server, &hc.token)?;
+            let _ = fs::create_dir_all(token_cache_path().parent().unwrap());
+            let _ = fs::write(token_cache_path(), format!("{}|{}", hc.server, tok));
+            tok
+        }
+    };
+
+    let machine = hostname();
+    println!("ccd daemon started. Machine: {machine}");
 
 fn main() {
     let args: Vec<String> = env::args().collect();
     let sub = args.get(1).map(|s| s.as_str()).unwrap_or("");
 
     let result = match sub {
+        "connect" => {
+            let url = args.get(2).context("Usage: ccd connect <url>")?;
+            let (server, token) = cct::launch::parse_connection_url(url)?;
+            cct::config::write_happy_config(&server, &token)?;
+            println!("Connected to {server}");
+            Ok(())
+        }
         "start" => start(),
         "stop" => stop(),
         "status" => status(),
-        "daemon-run" => run_daemon(), // internal: run the actual daemon loop
+        "daemon-run" => run_daemon(),
         _ => {
-            println!("Usage: ccd <start|stop|status>");
+            println!("Usage: ccd <connect|start|stop|status>");
             Ok(())
         }
     };
