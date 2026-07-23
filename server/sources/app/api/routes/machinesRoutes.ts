@@ -175,6 +175,39 @@ export function machinesRoutes(app: Fastify) {
         };
     });
 
+    // POST /v1/machines/:id/heartbeat — daemon pings this to keep machine "online"
+    app.post('/v1/machines/:id/heartbeat', {
+        preHandler: app.authenticate,
+        schema: { params: z.object({ id: z.string() }) },
+    }, async (request, reply) => {
+        const userId = request.userId;
+        const machineId = request.params.id;
+
+        const machine = await db.machine.findFirst({
+            where: { accountId: userId, id: machineId },
+        });
+
+        if (machine) {
+            await db.machine.update({
+                where: { accountId_id: { accountId: userId, id: machineId } },
+                data: { lastActiveAt: new Date(), active: true },
+            });
+        } else {
+            // Auto-create on first heartbeat
+            await db.machine.create({
+                data: {
+                    id: machineId,
+                    accountId: userId,
+                    metadata: "{}",
+                    active: true,
+                    lastActiveAt: new Date(),
+                },
+            });
+        }
+
+        return reply.send({ ok: true });
+    });
+
     // DELETE /v1/machines/:id - Remove a machine and its access keys.
     // Sessions spawned by this machine are preserved so history is not lost.
     app.delete('/v1/machines/:id', {

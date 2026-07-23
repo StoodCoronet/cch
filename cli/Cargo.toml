@@ -11,6 +11,10 @@ path = "src/lib.rs"
 name = "cch"
 path = "src/main.rs"
 
+[[bin]]
+name = "ccd"
+path = "src/daemon.rs"
+
 [dependencies]
 clap      = { version = "4", features = ["derive"] }
 ratatui   = "0.29"
