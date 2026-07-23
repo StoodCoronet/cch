@@ -68,23 +68,21 @@ function loadTokens(accountId) {
     api("GET", "/v1/admin/bootstrap-tokens/" + accountId).then(function(data) {
         var tbody = $("tokens-tbody");
         tbody.innerHTML = "";
-        data.tokens.forEach(function(t) {
-            var revoked = t.revokedAt !== null;
+        var active = data.tokens.filter(function(t) { return t.revokedAt === null; });
+        active.forEach(function(t) {
             var tr = document.createElement("tr");
             tr.innerHTML =
                 "<td>" + esc(t.label || "—") + "</td>" +
                 "<td>" + fmt(t.createdAt) + "</td>" +
-                "<td><span class=\"badge " + (revoked ? "badge-revoked" : "badge-active") + "\">" + (revoked ? "Revoked" : "Active") + "</span></td>" +
+                "<td><span class=\"badge badge-active\">Active</span></td>" +
                 "<td></td>";
-            if (!revoked) {
-                var btn = document.createElement("button");
-                btn.className = "small danger";
-                btn.textContent = "Revoke";
-                btn.onclick = (function(tid, aid) {
-                    return function() { revokeToken(tid, aid); };
-                })(t.id, accountId);
-                tr.cells[3].appendChild(btn);
-            }
+            var btn = document.createElement("button");
+            btn.className = "small danger";
+            btn.textContent = "Revoke";
+            btn.onclick = (function(tid, aid) {
+                return function() { revokeToken(tid, aid); };
+            })(t.id, accountId);
+            tr.cells[3].appendChild(btn);
             tbody.appendChild(tr);
         });
     }).catch(function(e) { console.error(e); });
