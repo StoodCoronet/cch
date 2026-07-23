@@ -1,6 +1,17 @@
 name: Deploy to Aliyun ECS
 
 on:
+  push:
+    branches: [master]
+    paths:
+      - 'server/**'
+      - 'packages/wire/**'
+      - '.npmrc'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'package.json'
+      - 'patches/**'
+      - 'scripts/**'
   workflow_dispatch:
 
 jobs:
