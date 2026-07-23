@@ -1,16 +1,16 @@
 name: Deploy to Aliyun ECS
 
 on:
-  workflow_run:
-    workflows: ["Build and Push"]
-    types: [completed]
+  push:
     branches: [master]
 
 jobs:
   deploy:
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     steps:
+      - name: Wait for build
+        run: sleep 120
+
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1
         with:

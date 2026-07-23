@@ -108,7 +108,13 @@ function loadSessions() {
                 "<td>" + machine.replace(/[&<>\"']/g, "") + "</td>" +
                 "<td><span class=\"badge " + (s.active ? "badge-active" : "badge-off") + "\">" + (s.active ? "Active" : "Idle") + "</span></td>" +
                 "<td>" + ago(s.activeAt) + "</td>" +
-                "<td>" + fmt(s.createdAt) + "</td>";
+                "<td>" + fmt(s.createdAt) + "</td>" +
+                "<td></td>";
+            var delBtn = document.createElement("button");
+            delBtn.className = "small danger";
+            delBtn.textContent = "Del";
+            delBtn.onclick = (function(sid) { return function() { deleteSession(sid); }; })(s.id);
+            tr.cells[5].appendChild(delBtn);
             tbody.appendChild(tr);
         });
     }).catch(function(e) { console.error(e); });
@@ -131,7 +137,13 @@ function loadMachines() {
             var tr = document.createElement("tr");
             tr.innerHTML =
                 "<td><code>" + (m.id || "").replace(/[&<>\"']/g, "") + "</code></td>" +
-                "<td>" + ago(m.activeAt) + "</td>";
+                "<td>" + ago(m.activeAt) + "</td>" +
+                "<td></td>";
+            var delBtn = document.createElement("button");
+            delBtn.className = "small danger";
+            delBtn.textContent = "Del";
+            delBtn.onclick = (function(mid) { return function() { deleteMachine(mid); }; })(m.id);
+            tr.cells[2].appendChild(delBtn);
             tbody.appendChild(tr);
         });
     }).catch(function(e) { console.error(e); });
@@ -201,6 +213,16 @@ function loadTokens() {
 function revokeToken(id) {
     if (!confirm("Revoke this token?")) return;
     api("POST", "/v1/bootstrap-tokens/" + id + "/revoke").then(function() { loadTokens(); });
+}
+
+function deleteSession(id) {
+    if (!confirm("Delete this session? Local data is unaffected.")) return;
+    api("DELETE", "/v1/sessions/" + id).then(function() { loadSessions(); });
+}
+
+function deleteMachine(id) {
+    if (!confirm("Delete this machine? Local data is unaffected.")) return;
+    api("DELETE", "/v1/machines/" + id).then(function() { loadMachines(); });
 }
 
 function copyText(txt) {
