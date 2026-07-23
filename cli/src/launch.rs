@@ -86,8 +86,9 @@ pub fn exec_claude(profile: &Profile, with_continue: bool) -> anyhow::Error {
 
     if use_happy {
         let hc = happy.unwrap();
-        let hostname = env::var("HOSTNAME")
-            .or_else(|_| env::var("HOST"))
+        let hostname = Command::new("hostname")
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
             .unwrap_or_else(|_| "unknown".to_string());
 
         // Bootstrap or load cached auth token
@@ -106,15 +107,11 @@ pub fn exec_claude(profile: &Profile, with_continue: bool) -> anyhow::Error {
             eprintln!("cch: machine report failed: {e}");
         }
 
-        // Report session (fire-and-forget after claude starts)
-        let server = hc.server.clone();
-        let tok = token.clone();
+        // Report session synchronously (must finish before exec replaces this process)
         let cwd = env::current_dir().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
-        std::thread::spawn(move || {
-            if let Err(e) = report_session(&server, &tok, &cwd) {
-                eprintln!("cch: session report failed: {e}");
-            }
-        });
+        if let Err(e) = report_session(&hc.server, &token, &cwd) {
+            eprintln!("cch: session report failed: {e}");
+        }
 
         let err = Command::new("claude").args(&args).exec();
         anyhow::anyhow!("exec claude: {err}")

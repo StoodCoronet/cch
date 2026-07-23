@@ -129,7 +129,6 @@ function loadMachines() {
             var tr = document.createElement("tr");
             tr.innerHTML =
                 "<td><code>" + (m.id || "").replace(/[&<>\"']/g, "") + "</code></td>" +
-                "<td><span class=\"badge " + (m.active ? "badge-active" : "badge-off") + "\">" + (m.active ? "Online" : "Offline") + "</span></td>" +
                 "<td>" + ago(m.activeAt) + "</td>";
             tbody.appendChild(tr);
         });
