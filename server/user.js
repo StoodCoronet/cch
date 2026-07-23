@@ -102,8 +102,10 @@ function loadSessions() {
         $("sessions-table").classList.remove("hidden");
         data.sessions.forEach(function(s) {
             var tr = document.createElement("tr");
+            var machine = s.metadata || "—";
             tr.innerHTML =
                 "<td><code>" + s.id.slice(0, 12) + "</code></td>" +
+                "<td>" + machine.replace(/[&<>\"']/g, "") + "</td>" +
                 "<td><span class=\"badge " + (s.active ? "badge-active" : "badge-off") + "\">" + (s.active ? "Active" : "Idle") + "</span></td>" +
                 "<td>" + ago(s.activeAt) + "</td>" +
                 "<td>" + fmt(s.createdAt) + "</td>";

@@ -109,7 +109,7 @@ pub fn exec_claude(profile: &Profile, with_continue: bool) -> anyhow::Error {
 
         // Report session synchronously (must finish before exec replaces this process)
         let cwd = env::current_dir().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
-        if let Err(e) = report_session(&hc.server, &token, &cwd) {
+        if let Err(e) = report_session(&hc.server, &token, &cwd, &hostname) {
             eprintln!("cch: session report failed: {e}");
         }
 
@@ -175,13 +175,13 @@ fn report_machine(server: &str, auth_token: &str, hostname: &str) -> Result<()> 
     Ok(())
 }
 
-fn report_session(server: &str, auth_token: &str, cwd: &str) -> Result<()> {
+fn report_session(server: &str, auth_token: &str, cwd: &str, hostname: &str) -> Result<()> {
     let client = reqwest::blocking::Client::new();
     let tag = cwd.replace('/', "-").trim_start_matches('-').to_string();
     let resp = client
         .post(format!("{server}/v1/sessions"))
         .header("Authorization", format!("Bearer {auth_token}"))
-        .json(&SessionReq { tag: &tag, metadata: "{}".into() })
+        .json(&SessionReq { tag: &tag, metadata: hostname.into() })
         .timeout(std::time::Duration::from_secs(10))
         .send()
         .context("session report failed")?;
