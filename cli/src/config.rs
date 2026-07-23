@@ -250,7 +250,6 @@ pub fn ensure_codex_profile() -> Result<()> {
             full_auto: None,
             auth_type: None,
             max_context_size: None,
-            happy: None,
         })?;
     }
     Ok(())
@@ -273,7 +272,6 @@ pub fn ensure_kimi_profile() -> Result<()> {
             full_auto: None,
             auth_type: None,
             max_context_size: None,
-            happy: None,
         })?;
     }
     Ok(())

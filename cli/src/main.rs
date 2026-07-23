@@ -56,18 +56,14 @@ enum Commands {
     /// Manage the local proxy daemon
     #[command(subcommand)]
     Proxy(ProxyCommand),
-    /// Manage happy self-host server connection
-    Happy {
-        /// Connect to a happy server with a connection URL
-        #[arg(long)]
-        connect: Option<String>,
-        /// Disconnect from the happy server
-        #[arg(long)]
-        disconnect: bool,
-        /// Show current happy connection status
-        #[arg(long)]
-        status: bool,
+    /// Connect to a happy server with a connection URL
+    Connect {
+        url: String,
     },
+    /// Disconnect from the happy server
+    Disconnect,
+    /// Show current happy connection status
+    Status,
 }
 
 fn main() -> Result<()> {
@@ -104,11 +100,9 @@ fn main() -> Result<()> {
             ProxyCommand::Start => run_proxy_start(),
             ProxyCommand::Stop => stop_proxy(),
         },
-        Some(Commands::Happy {
-            connect,
-            disconnect,
-            status,
-        }) => run_happy(connect, disconnect, status),
+        Some(Commands::Connect { url }) => run_connect(&url),
+        Some(Commands::Disconnect) => run_disconnect(),
+        Some(Commands::Status) => run_status(),
         None => run_tui(),
     }
 }
@@ -260,47 +254,32 @@ fn stop_proxy() -> Result<()> {
     Ok(())
 }
 
-fn run_happy(connect: Option<String>, disconnect: bool, status: bool) -> Result<()> {
-    if let Some(url) = connect {
-        let (server, token) = launch::parse_connection_url(&url)?;
-        config::write_happy_config(&server, &token)?;
-        println!("Connected to happy server at {server}");
-        println!("All Claude profiles will now launch through happy.");
-        return Ok(());
-    }
+fn run_connect(url: &str) -> Result<()> {
+    let (server, token) = launch::parse_connection_url(url)?;
+    config::write_happy_config(&server, &token)?;
+    println!("Connected to {server}");
+    Ok(())
+}
 
-    if disconnect {
-        config::remove_happy_config()?;
-        println!("Disconnected from happy server.");
-        return Ok(());
-    }
+fn run_disconnect() -> Result<()> {
+    config::remove_happy_config()?;
+    println!("Disconnected.");
+    Ok(())
+}
 
-    if status {
-        match config::load_happy_config() {
-            Some(hc) => {
-                let masked = if hc.token.len() > 8 {
-                    format!("{}...{}", &hc.token[..4], &hc.token[hc.token.len() - 4..])
-                } else {
-                    "****".to_string()
-                };
-                println!("Happy server: {}", hc.server);
-                println!("Token:        {masked}");
-            }
-            None => {
-                println!("Not connected to a happy server.");
-                println!("Run 'cct happy --connect <url>' to connect.");
-            }
+fn run_status() -> Result<()> {
+    match config::load_happy_config() {
+        Some(hc) => {
+            let masked = if hc.token.len() > 8 {
+                format!("{}...{}", &hc.token[..4], &hc.token[hc.token.len() - 4..])
+            } else {
+                "****".to_string()
+            };
+            println!("Server: {}", hc.server);
+            println!("Token:  {masked}");
         }
-        return Ok(());
+        None => println!("Not connected. Use 'cch connect <url>' to connect."),
     }
-
-    // No flags: show help
-    println!("Usage: cct happy [OPTIONS]");
-    println!();
-    println!("Options:");
-    println!("  --connect <url>   Connect to a happy server with a connection URL");
-    println!("  --disconnect      Disconnect from the happy server");
-    println!("  --status          Show current connection status");
     Ok(())
 }
 

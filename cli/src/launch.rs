@@ -1,6 +1,7 @@
 use crate::config::Profile;
 use anyhow::{Context, Result};
 use crossterm::{execute, terminal::LeaveAlternateScreen};
+use serde::{Deserialize, Serialize};
 use std::{
     env, fs, io,
     os::unix::process::CommandExt,
@@ -69,9 +70,8 @@ pub fn build_launch_command(profile: &Profile, with_continue: bool) -> (String, 
     }
 }
 
-/// Inject profile env vars and exec-replace the current process with `claude`
-/// (or `happy` when `[happy]` is configured globally).
-/// Returns only on error (process was not replaced).
+/// Inject profile env vars and exec-replace the current process with `claude`.
+/// When `[happy]` is configured globally, reports machine/session to server first.
 pub fn exec_claude(profile: &Profile, with_continue: bool) -> anyhow::Error {
     let happy = crate::config::load_happy_config();
     let use_happy = happy.is_some() && profile.happy != Some(false);
@@ -86,14 +86,127 @@ pub fn exec_claude(profile: &Profile, with_continue: bool) -> anyhow::Error {
 
     if use_happy {
         let hc = happy.unwrap();
-        env::set_var("HAPPY_SERVER_URL", &hc.server);
-        env::set_var("HAPPY_BOOTSTRAP_TOKEN", &hc.token);
-        let err = Command::new("happy").args(&args).exec();
-        anyhow::anyhow!("exec happy: {err}")
+        let hostname = env::var("HOSTNAME")
+            .or_else(|_| env::var("HOST"))
+            .unwrap_or_else(|_| "unknown".to_string());
+
+        // Bootstrap or load cached auth token
+        let token = match load_cached_token(&hc.server) {
+            Some(t) => t,
+            None => {
+                let creds = bootstrap(&hc.server, &hc.token, &hostname)
+                    .unwrap_or_else(|e| { eprintln!("cch: bootstrap failed: {e}"); std::process::exit(1); });
+                save_cached_token(&hc.server, &creds.token);
+                creds.token
+            }
+        };
+
+        // Report machine
+        if let Err(e) = report_machine(&hc.server, &token, &hostname) {
+            eprintln!("cch: machine report failed: {e}");
+        }
+
+        // Report session (fire-and-forget after claude starts)
+        let server = hc.server.clone();
+        let tok = token.clone();
+        let cwd = env::current_dir().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+        std::thread::spawn(move || {
+            if let Err(e) = report_session(&server, &tok, &cwd) {
+                eprintln!("cch: session report failed: {e}");
+            }
+        });
+
+        let err = Command::new("claude").args(&args).exec();
+        anyhow::anyhow!("exec claude: {err}")
     } else {
         let err = Command::new("claude").args(&args).exec();
         anyhow::anyhow!("exec claude: {err}")
     }
+}
+
+// ---- MVP: direct server communication ----
+
+#[derive(Serialize)]
+struct BootstrapReq<'a> {
+    token: &'a str,
+    hostname: &'a str,
+}
+
+#[derive(Deserialize)]
+struct BootstrapResp {
+    token: String,
+    #[serde(rename = "accountId")]
+    _account_id: String,
+}
+
+#[derive(Serialize)]
+struct MachineReq<'a> {
+    id: &'a str,
+    metadata: String,
+    #[serde(rename = "dataEncryptionKey")]
+    _dek: Option<String>,
+}
+
+#[derive(Serialize)]
+struct SessionReq<'a> {
+    tag: &'a str,
+    metadata: String,
+}
+
+fn bootstrap(server: &str, bootstrap_token: &str, hostname: &str) -> Result<BootstrapResp> {
+    let client = reqwest::blocking::Client::new();
+    let resp = client
+        .post(format!("{server}/v1/auth/bootstrap"))
+        .json(&BootstrapReq { token: bootstrap_token, hostname })
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .context("bootstrap request failed")?;
+    anyhow::ensure!(resp.status().is_success(), "bootstrap returned {}", resp.status());
+    resp.json().context("bootstrap parse failed")
+}
+
+fn report_machine(server: &str, auth_token: &str, hostname: &str) -> Result<()> {
+    let client = reqwest::blocking::Client::new();
+    let resp = client
+        .post(format!("{server}/v1/machines"))
+        .header("Authorization", format!("Bearer {auth_token}"))
+        .json(&MachineReq { id: hostname, metadata: "{}".into(), _dek: None })
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .context("machine report failed")?;
+    anyhow::ensure!(resp.status().is_success(), "machine report returned {}", resp.status());
+    Ok(())
+}
+
+fn report_session(server: &str, auth_token: &str, cwd: &str) -> Result<()> {
+    let client = reqwest::blocking::Client::new();
+    let tag = cwd.replace('/', "-").trim_start_matches('-').to_string();
+    let resp = client
+        .post(format!("{server}/v1/sessions"))
+        .header("Authorization", format!("Bearer {auth_token}"))
+        .json(&SessionReq { tag: &tag, metadata: "{}".into() })
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .context("session report failed")?;
+    anyhow::ensure!(resp.status().is_success(), "session report returned {}", resp.status());
+    Ok(())
+}
+
+fn token_cache_path() -> PathBuf {
+    dirs::home_dir().unwrap_or_default().join(".cch").join("token")
+}
+
+fn load_cached_token(server: &str) -> Option<String> {
+    let path = token_cache_path();
+    let data = fs::read_to_string(&path).ok()?;
+    let prefix = format!("{server}|");
+    data.strip_prefix(&prefix).map(|t| t.trim().to_string())
+}
+
+fn save_cached_token(server: &str, token: &str) {
+    let path = token_cache_path();
+    let _ = fs::create_dir_all(path.parent().unwrap());
+    let _ = fs::write(&path, format!("{server}|{token}"));
 }
 
 /// Parse a connection URL of the form `https://host/connect?token=xxx`
