@@ -1,6 +1,7 @@
 services:
   cch-server:
     image: ghcr.io/stoodcoronet/cch-server:latest
+    restart: unless-stopped
     ports:
       - "3005:3005"
     environment:
