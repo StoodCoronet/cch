@@ -180,12 +180,16 @@ pub fn remove_happy_config() -> Result<()> {
 }
 
 pub fn config_path() -> PathBuf {
+    if let Ok(p) = std::env::var("CCH_CONFIG") {
+        return PathBuf::from(p);
+    }
+    // Fall back to CCT_CONFIG for migration
     if let Ok(p) = std::env::var("CCT_CONFIG") {
         return PathBuf::from(p);
     }
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("~/.config"))
-        .join("cc-tui")
+        .join("cc-happy")
         .join("profiles.toml")
 }
 
@@ -227,8 +231,18 @@ pub fn ensure_default_config() -> Result<()> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).with_context(|| format!("create config dir {parent:?}"))?;
         }
-        fs::write(&path, DEFAULT_CONFIG)
-            .with_context(|| format!("write default config to {path:?}"))?;
+        // Try copying from cc-tui if it exists
+        let cct_path = dirs::config_dir()
+            .unwrap_or_else(|| PathBuf::from("~/.config"))
+            .join("cc-tui")
+            .join("profiles.toml");
+        if cct_path.exists() {
+            fs::copy(&cct_path, &path)
+                .with_context(|| format!("copy config from {cct_path:?}"))?;
+        } else {
+            fs::write(&path, DEFAULT_CONFIG)
+                .with_context(|| format!("write default config to {path:?}"))?;
+        }
     }
     Ok(())
 }

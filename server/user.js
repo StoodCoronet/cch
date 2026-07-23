@@ -184,11 +184,11 @@ function loadTokens() {
                 copyBtn.textContent = "Copy";
                 copyBtn.style.marginLeft = "4px";
                 copyBtn.onclick = (function(conn) { return function() {
-                    navigator.clipboard.writeText(conn).then(function() {
-                        this.textContent = "Copied!";
-                        var self = this;
-                        setTimeout(function() { self.textContent = "Copy"; }, 2000);
-                    }.bind(this));
+                    var btn = this;
+                    copyText(conn).then(function() {
+                        btn.textContent = "Copied!";
+                        setTimeout(function() { btn.textContent = "Copy"; }, 2000);
+                    });
                 }; })(saved[t.id]);
                 actions.appendChild(copyBtn);
             }
@@ -202,9 +202,25 @@ function revokeToken(id) {
     api("POST", "/v1/bootstrap-tokens/" + id + "/revoke").then(function() { loadTokens(); });
 }
 
+function copyText(txt) {
+    // Fallback for HTTP origins where navigator.clipboard is unavailable
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        return navigator.clipboard.writeText(txt);
+    }
+    var ta = document.createElement("textarea");
+    ta.value = txt;
+    ta.style.position = "fixed";
+    ta.style.left = "-9999px";
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    document.body.removeChild(ta);
+    return Promise.resolve();
+}
+
 function copyToken() {
     var txt = $("new-conn-str").textContent;
-    navigator.clipboard.writeText(txt).then(function() {
+    copyText(txt).then(function() {
         var btn = $("copy-token-btn");
         btn.textContent = "Copied!";
         setTimeout(function() { btn.textContent = "Copy"; }, 2000);
