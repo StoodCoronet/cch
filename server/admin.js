@@ -157,4 +157,14 @@ if (P) {
     $("login-screen").classList.add("hidden");
     $("main-screen").classList.remove("hidden");
     loadAccounts();
+    loadStats();
+    setInterval(loadStats, 30000);
+}
+
+function loadStats() {
+    api("GET", "/v1/admin/stats").then(function(data) {
+        $("stat-accounts").textContent = data.accounts;
+        $("stat-active").textContent = data.activeSessions;
+        $("stat-total").textContent = data.totalSessions;
+    }).catch(function(e) { console.error(e); });
 }

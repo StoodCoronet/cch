@@ -30,6 +30,24 @@ function adminAuth(request: any, reply: any): boolean {
 
 export function adminRoutes(app: Fastify) {
 
+    // Stats overview for admin dashboard
+    app.get('/v1/admin/stats', {
+    }, async (request, reply) => {
+        if (!adminAuth(request, reply)) return;
+
+        const [accountCount, activeSessionCount, totalSessionCount] = await Promise.all([
+            db.account.count(),
+            db.session.count({ where: { active: true } }),
+            db.session.count(),
+        ]);
+
+        return reply.send({
+            accounts: accountCount,
+            activeSessions: activeSessionCount,
+            totalSessions: totalSessionCount,
+        });
+    });
+
     // Create an account (admin-only — generates keypair server-side)
     app.post('/v1/admin/accounts', {
         schema: {

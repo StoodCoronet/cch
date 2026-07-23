@@ -138,7 +138,7 @@ function loadMachines() {
 
 function generateToken() {
     var label = $("token-label-input").value.trim() || null;
-    var body = { accountId: ACCOUNT_ID };
+    var body = {};
     if (label) body.label = label;
     $("gen-token-error").textContent = "";
     api("POST", "/v1/bootstrap-tokens", body).then(function(data) {
@@ -150,7 +150,7 @@ function generateToken() {
 }
 
 function loadTokens() {
-    api("GET", "/v1/bootstrap-tokens/" + ACCOUNT_ID).then(function(data) {
+    api("GET", "/v1/bootstrap-tokens").then(function(data) {
         var tbody = $("tokens-tbody");
         tbody.innerHTML = "";
         if (!data.tokens || data.tokens.length === 0) {
