@@ -89,7 +89,7 @@ function refresh() {
 }
 
 function loadSessions() {
-    api("GET", "/v2/sessions/active?limit=50").then(function(data) {
+    api("GET", "/v1/sessions").then(function(data) {
         var tbody = $("sessions-tbody");
         tbody.innerHTML = "";
         $("session-count").textContent = "(" + data.sessions.length + ")";
