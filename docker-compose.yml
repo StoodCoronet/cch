@@ -1,8 +1,6 @@
 services:
   cch-server:
-    build:
-      context: .
-      dockerfile: server/Dockerfile
+    image: ghcr.io/stoodcoronet/cch-server:latest
     ports:
       - "3005:3005"
     environment:
