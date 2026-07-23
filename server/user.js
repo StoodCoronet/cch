@@ -142,9 +142,14 @@ function generateToken() {
     if (label) body.label = label;
     $("gen-token-error").textContent = "";
     api("POST", "/v1/bootstrap-tokens", body).then(function(data) {
-        $("new-conn-str").textContent = SERVER + "/connect?token=" + data.token;
+        var conn = SERVER + "/connect?token=" + data.token;
+        $("new-conn-str").textContent = conn;
         $("new-token-area").classList.remove("hidden");
         $("token-label-input").value = "";
+        // Save connection string so Copy button works after refresh
+        var saved = JSON.parse(localStorage.getItem("cch_tokens") || "{}");
+        saved[data.record.id] = conn;
+        localStorage.setItem("cch_tokens", JSON.stringify(saved));
         loadTokens();
     }).catch(function(e) { $("gen-token-error").textContent = e.message; });
 }
@@ -159,6 +164,7 @@ function loadTokens() {
             return;
         }
         $("tokens-table").classList.remove("hidden");
+        var saved = JSON.parse(localStorage.getItem("cch_tokens") || "{}");
         active.forEach(function(t) {
             var tr = document.createElement("tr");
             tr.innerHTML =
@@ -166,11 +172,26 @@ function loadTokens() {
                 "<td>" + fmt(t.createdAt) + "</td>" +
                 "<td><span class=\"badge badge-active\">Active</span></td>" +
                 "<td></td>";
+            var actions = tr.cells[3];
             var revokeBtn = document.createElement("button");
             revokeBtn.className = "small danger";
             revokeBtn.textContent = "Revoke";
             revokeBtn.onclick = (function(tid) { return function() { revokeToken(tid); }; })(t.id);
-            tr.cells[3].appendChild(revokeBtn);
+            actions.appendChild(revokeBtn);
+            if (saved[t.id]) {
+                var copyBtn = document.createElement("button");
+                copyBtn.className = "small";
+                copyBtn.textContent = "Copy";
+                copyBtn.style.marginLeft = "4px";
+                copyBtn.onclick = (function(conn) { return function() {
+                    navigator.clipboard.writeText(conn).then(function() {
+                        this.textContent = "Copied!";
+                        var self = this;
+                        setTimeout(function() { self.textContent = "Copy"; }, 2000);
+                    }.bind(this));
+                }; })(saved[t.id]);
+                actions.appendChild(copyBtn);
+            }
             tbody.appendChild(tr);
         });
     }).catch(function(e) { console.error(e); });
