@@ -153,26 +153,24 @@ function loadTokens() {
     api("GET", "/v1/bootstrap-tokens").then(function(data) {
         var tbody = $("tokens-tbody");
         tbody.innerHTML = "";
-        if (!data.tokens || data.tokens.length === 0) {
+        var active = (data.tokens || []).filter(function(t) { return t.revokedAt === null; });
+        if (active.length === 0) {
             $("tokens-table").classList.add("hidden");
             return;
         }
         $("tokens-table").classList.remove("hidden");
-        data.tokens.forEach(function(t) {
-            var revoked = t.revokedAt !== null;
+        active.forEach(function(t) {
             var tr = document.createElement("tr");
             tr.innerHTML =
                 "<td>" + (t.label || "—") + "</td>" +
                 "<td>" + fmt(t.createdAt) + "</td>" +
-                "<td><span class=\"badge " + (revoked ? "badge-off" : "badge-active") + "\">" + (revoked ? "Revoked" : "Active") + "</span></td>" +
+                "<td><span class=\"badge badge-active\">Active</span></td>" +
                 "<td></td>";
-            if (!revoked) {
-                var btn = document.createElement("button");
-                btn.className = "small danger";
-                btn.textContent = "Revoke";
-                btn.onclick = (function(tid) { return function() { revokeToken(tid); }; })(t.id);
-                tr.cells[3].appendChild(btn);
-            }
+            var revokeBtn = document.createElement("button");
+            revokeBtn.className = "small danger";
+            revokeBtn.textContent = "Revoke";
+            revokeBtn.onclick = (function(tid) { return function() { revokeToken(tid); }; })(t.id);
+            tr.cells[3].appendChild(revokeBtn);
             tbody.appendChild(tr);
         });
     }).catch(function(e) { console.error(e); });
