@@ -8,6 +8,12 @@ import {
     listBootstrapTokens,
     revokeBootstrapToken,
 } from "@/app/auth/bootstrapToken";
+import { kvMutate } from "@/app/kv/kvMutate";
+import {
+    PASSWORD_KV_KEY,
+    hashPassword,
+    encodePasswordRecord,
+} from "@/app/auth/password";
 
 function adminAuth(request: any, reply: any): boolean {
     const password = process.env.ADMIN_PASSWORD;
@@ -51,7 +57,10 @@ export function adminRoutes(app: Fastify) {
     // Create an account (admin-only — generates keypair server-side)
     app.post('/v1/admin/accounts', {
         schema: {
-            body: z.object({ username: z.string().min(1).max(64) }),
+            body: z.object({
+                username: z.string().min(1).max(64),
+                password: z.string().min(1).max(128).optional(),
+            }),
         },
     }, async (request, reply) => {
         if (!adminAuth(request, reply)) return;
@@ -73,6 +82,15 @@ export function adminRoutes(app: Fastify) {
                 username: request.body.username,
             },
         });
+
+        if (request.body.password) {
+            const hashed = await hashPassword(request.body.password);
+            await kvMutate({ uid: account.id }, [{
+                key: PASSWORD_KV_KEY,
+                value: encodePasswordRecord(hashed),
+                version: -1,
+            }]);
+        }
 
         return reply.send({
             accountId: account.id,
@@ -177,7 +195,12 @@ export function adminRoutes(app: Fastify) {
         });
         return reply.send({
             token: result.plaintext,
-            record: { id: result.record.id, label: result.record.label, createdAt: result.record.createdAt },
+            record: {
+                id: result.record.id,
+                label: result.record.label,
+                createdAt: result.record.createdAt,
+                connectionUrl: (process.env.PUBLIC_URL || (request.protocol + '://' + request.hostname + ':' + process.env.PORT)) + '/connect?token=' + result.plaintext,
+            },
         });
     });
 
@@ -185,7 +208,42 @@ export function adminRoutes(app: Fastify) {
         preHandler: app.authenticate,
     }, async (request, reply) => {
         const tokens = await listBootstrapTokens(request.userId);
-        return reply.send({ tokens });
+        const baseUrl = process.env.PUBLIC_URL || (request.protocol + '://' + request.hostname + ':' + process.env.PORT);
+        return reply.send({
+            tokens: tokens.map((t) => ({
+                id: t.id,
+                label: t.label,
+                createdAt: t.createdAt.getTime(),
+                revokedAt: t.revokedAt ? t.revokedAt.getTime() : null,
+                connectionUrl: t.tokenPlaintext ? `${baseUrl}/connect?token=${t.tokenPlaintext}` : null,
+            })),
+        });
+    });
+
+    app.patch('/v1/bootstrap-tokens/:id', {
+        preHandler: app.authenticate,
+        schema: {
+            params: z.object({ id: z.string() }),
+            body: z.object({ label: z.string().min(1).max(100) }),
+        },
+    }, async (request, reply) => {
+        const token = await db.bootstrapToken.findFirst({
+            where: { id: request.params.id, accountId: request.userId, revokedAt: null },
+        });
+        if (!token) return reply.code(404).send({ error: 'Token not found' });
+        const updated = await db.bootstrapToken.update({
+            where: { id: token.id },
+            data: { label: request.body.label },
+        });
+        return reply.send({
+            success: true,
+            token: {
+                id: updated.id,
+                label: updated.label,
+                createdAt: updated.createdAt.getTime(),
+                revokedAt: updated.revokedAt ? updated.revokedAt.getTime() : null,
+            },
+        });
     });
 
     app.post('/v1/bootstrap-tokens/:id/revoke', {

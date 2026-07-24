@@ -46,11 +46,22 @@ export function sessionRoutes(app: Fastify) {
             }
         });
 
+        const sessionIds = sessions.map((v) => v.id);
+        const messageCounts = sessionIds.length
+            ? await db.plaintextMessage.groupBy({
+                  by: ['sessionId'],
+                  where: { sessionId: { in: sessionIds } },
+                  _count: { sessionId: true }
+              })
+            : [];
+        const countMap = new Map(messageCounts.map((c) => [c.sessionId, c._count.sessionId]));
+
         return reply.send({
             sessions: sessions.map((v) => {
                 // const lastMessage = v.messages[0];
                 const sessionUpdatedAt = v.updatedAt.getTime();
                 // const lastMessageCreatedAt = lastMessage ? lastMessage.createdAt.getTime() : 0;
+                const msgCount = countMap.get(v.id) || 0;
 
                 return {
                     id: v.id,
@@ -64,7 +75,10 @@ export function sessionRoutes(app: Fastify) {
                     agentState: v.agentState,
                     agentStateVersion: v.agentStateVersion,
                     dataEncryptionKey: v.dataEncryptionKey ? Buffer.from(v.dataEncryptionKey).toString('base64') : null,
-                    lastMessage: null
+                    lastMessage: null,
+                    machineName: v.metadata,
+                    msgCount: msgCount,
+                    isPlaintext: msgCount > 0
                 };
             })
         });

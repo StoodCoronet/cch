@@ -17,12 +17,14 @@ export interface BootstrapTokenRecord {
     machineId: string | null;
     createdAt: Date;
     revokedAt: Date | null;
+    tokenPlaintext: string | null;
 }
 
 /**
  * Create a bootstrap token for an account.
  * Returns the PLAINTEXT token which is shown once at creation time.
- * Only the SHA-256 hash is stored in the database.
+ * The SHA-256 hash is stored for verification, and the plaintext is kept
+ * so the user can copy connection strings later from the dashboard.
  */
 export async function createBootstrapToken(params: {
     accountId: string;
@@ -34,6 +36,7 @@ export async function createBootstrapToken(params: {
         data: {
             accountId: params.accountId,
             tokenHash: hash,
+            tokenPlaintext: plaintext,
             label: params.label ?? null,
         },
     });
@@ -46,6 +49,7 @@ export async function createBootstrapToken(params: {
             machineId: record.machineId,
             createdAt: record.createdAt,
             revokedAt: record.revokedAt,
+            tokenPlaintext: record.tokenPlaintext,
         },
     };
 }
@@ -91,5 +95,6 @@ export async function listBootstrapTokens(accountId: string): Promise<BootstrapT
         machineId: r.machineId,
         createdAt: r.createdAt,
         revokedAt: r.revokedAt,
+        tokenPlaintext: r.tokenPlaintext,
     }));
 }

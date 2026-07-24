@@ -6,6 +6,8 @@ import { auth } from "@/app/auth/auth";
 import { log } from "@/utils/log";
 import { verifyBootstrapToken } from "@/app/auth/bootstrapToken";
 import { randomBytes } from "node:crypto";
+import { kvGet } from "@/app/kv/kvGet";
+import { PASSWORD_KV_KEY, verifyPassword, decodePasswordRecord } from "@/app/auth/password";
 
 export function authRoutes(app: Fastify) {
     app.post('/v1/auth', {
@@ -277,6 +279,45 @@ export function authRoutes(app: Fastify) {
                 machineKey: privacyKit.encodeBase64(machineKey),
             },
         });
+    });
+
+    // Password login — alternative to bootstrap tokens for the web dashboard.
+    app.post('/v1/auth/password', {
+        schema: {
+            body: z.object({
+                username: z.string().min(1),
+                password: z.string().min(1),
+            }),
+        },
+    }, async (request, reply) => {
+        const { username, password } = request.body;
+
+        const account = await db.account.findUnique({
+            where: { username },
+        });
+        if (!account) {
+            return reply.code(401).send({ error: 'Invalid username or password' });
+        }
+
+        const record = await kvGet({ uid: account.id }, PASSWORD_KV_KEY);
+        if (!record) {
+            return reply.code(401).send({ error: 'Password not set for this account' });
+        }
+
+        let parsed: ReturnType<typeof decodePasswordRecord>;
+        try {
+            parsed = decodePasswordRecord(record.value);
+        } catch {
+            return reply.code(500).send({ error: 'Failed to read password record' });
+        }
+
+        const valid = await verifyPassword(password, parsed);
+        if (!valid) {
+            return reply.code(401).send({ error: 'Invalid username or password' });
+        }
+
+        const authToken = await auth.createToken(account.id, { password: true });
+        return reply.send({ token: authToken, accountId: account.id });
     });
 
 }

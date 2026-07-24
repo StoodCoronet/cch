@@ -33,7 +33,7 @@ fn pid_file() -> std::path::PathBuf {
 }
 
 fn bootstrap(server: &str, token: &str) -> Result<String> {
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::blocking::Client::builder().no_proxy().build().expect("reqwest");
     let resp = client
         .post(format!("{server}/v1/auth/bootstrap"))
         .json(&json!({ "token": token, "hostname": hostname() }))
@@ -122,6 +122,94 @@ async fn run_daemon() -> Result<()> {
                 })).await {
                     eprintln!("ccd: state update error: {e}");
                 }
+                // Sync JSONL messages from tracking files
+                sync_session_messages(&hc.server, &auth_token, &machine).await;
+            }
+        }
+    }
+}
+
+async fn sync_session_messages(server: &str, auth: &str, _machine: &str) {
+    let track_dir = dirs::home_dir().unwrap_or_default().join(".cch").join("sessions");
+    if !track_dir.exists() { return; }
+    let claude_dir = dirs::home_dir().unwrap_or_default().join(".claude").join("projects");
+    let client = reqwest::blocking::Client::builder().no_proxy().build().unwrap();
+
+    if let Ok(entries) = std::fs::read_dir(&track_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().map_or(true, |e| e != "json") { continue; }
+            let offset_path = path.with_extension("offset");
+
+            // Read tracking info
+            let track: serde_json::Value = match std::fs::read_to_string(&path).ok()
+                .and_then(|s| serde_json::from_str(&s).ok()) { Some(v) => v, None => continue };
+            let session_id = track["sessionId"].as_str().unwrap_or("");
+            let cwd = track["cwd"].as_str().unwrap_or("");
+            if session_id.is_empty() || cwd.is_empty() { continue; }
+
+            // Find JSONL file in claude projects directory
+            // Try to find the claude project directory for this CWD
+            // Scan all projects dirs for JSONL files modified in last 30 min
+            let mut found_jsonl: Option<std::path::PathBuf> = None;
+            if let Ok(projects) = std::fs::read_dir(&claude_dir) {
+                for p in projects.flatten() {
+                    if let Ok(entries) = std::fs::read_dir(p.path()) {
+                        for e in entries.flatten() {
+                            let ep = e.path();
+                            if ep.extension().map_or(false, |ext| ext == "jsonl") {
+                                if let Ok(meta) = ep.metadata() {
+                                    if let Ok(m) = meta.modified() {
+                                        let age = std::time::SystemTime::now()
+                                            .duration_since(m).unwrap_or_default();
+                                        if age.as_secs() < 1800 { // 30 min
+                                            found_jsonl = Some(ep.clone());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            let jsonl = match found_jsonl { Some(j) => j, None => continue };
+
+            // Read from last offset and sync new messages
+            let offset: u64 = std::fs::read_to_string(&offset_path).ok()
+                .and_then(|s| s.trim().parse().ok()).unwrap_or(0);
+            if let Ok(meta) = jsonl.metadata() {
+                let size = meta.len();
+                if size > offset {
+                    if let Ok(content) = std::fs::read(&jsonl) {
+                        let new_data = &content[offset as usize..];
+                        for line in new_data.split(|&b| b == b'\n') {
+                            if line.is_empty() { continue; }
+                            if let Ok(msg) = serde_json::from_slice::<serde_json::Value>(line) {
+                                let role = msg["type"].as_str().unwrap_or("");
+                                let text = msg["message"]["content"].as_array()
+                                    .map(|parts| parts.iter()
+                                        .filter_map(|p| p["text"].as_str())
+                                        .collect::<Vec<_>>()
+                                        .join(""))
+                                    .unwrap_or_default();
+                                if !text.is_empty() && (role == "user" || role == "assistant") {
+                                    let _ = client
+                                        .post(format!("{server}/v1/sessions/{session_id}/plaintext-messages"))
+                                        .header("Authorization", format!("Bearer {auth}"))
+                                        .json(&serde_json::json!({ "role": role, "content": text }))
+                                        .send();
+                                }
+                            }
+                        }
+                        let _ = std::fs::write(&offset_path, size.to_string());
+                    }
+                }
+            }
+            // Clean up tracking if claude process is gone
+            if Command::new("pgrep").arg("-f").arg(cwd).output()
+                .map(|o| !o.status.success()).unwrap_or(true) {
+                let _ = std::fs::remove_file(&path);
+                let _ = std::fs::remove_file(&offset_path);
             }
         }
     }
@@ -160,10 +248,48 @@ async fn handle_rpc(payload: Payload, socket: rust_socketio::asynchronous::Clien
             let cwd = params["cwd"].as_str().unwrap_or(".");
             let prompt = params["prompt"].as_str().unwrap_or("");
             let mut cmd = Command::new("claude");
-            cmd.current_dir(cwd);
+            cmd.current_dir(cwd)
+               .arg("--print")
+               .arg("--output-format").arg("stream-json")
+               .stdout(std::process::Stdio::piped())
+               .stderr(std::process::Stdio::null());
             if !prompt.is_empty() { cmd.arg(prompt); }
             match cmd.spawn() {
-                Ok(_) => json!({ "ok": true, "message": "session started" }),
+                Ok(mut child) => {
+                    // Report session to server first
+                    let _cwd_tag = cwd.replace('/', "-").trim_start_matches('-').to_string();
+                    // We need auth info — return session ID to caller
+                    let pid = child.id();
+                    // Read stdout and emit messages via Socket.IO
+                    let sock = socket.clone();
+                    tokio::spawn(async move {
+                        use std::io::BufRead;
+                        if let Some(stdout) = child.stdout.take() {
+                            let reader = std::io::BufReader::new(stdout);
+                            for line in reader.lines() {
+                                if let Ok(line) = line {
+                                    if let Ok(msg) = serde_json::from_str::<serde_json::Value>(&line) {
+                                        let role = msg["type"].as_str().unwrap_or("unknown");
+                                        let content = msg["message"]["content"].as_array()
+                                            .map(|parts| parts.iter()
+                                                .filter_map(|p| p["text"].as_str())
+                                                .collect::<Vec<_>>()
+                                                .join(""))
+                                            .unwrap_or_default();
+                                        if !content.is_empty() && (role == "user" || role == "assistant") {
+                                            let _ = sock.emit("ccd-message", json!({
+                                                "sessionId": "", // TODO: get from session creation
+                                                "role": if role == "user" { "user" } else { "assistant" },
+                                                "content": content,
+                                            })).await;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    });
+                    json!({ "ok": true, "pid": pid })
+                }
                 Err(e) => json!({ "ok": false, "error": e.to_string() }),
             }
         }
