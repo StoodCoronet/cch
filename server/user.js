@@ -4,24 +4,21 @@ var SERVER = localStorage.getItem("cch_server") || window.location.origin;
 var THEME = localStorage.getItem("cch_theme") || "light";
 var currentSessionId = null;
 var refreshTimer = null;
-
 var $ = function(id) { return document.getElementById(id); };
 
-// ---- theme ----
-
+// theme
 function applyTheme() {
     document.documentElement.setAttribute("data-theme", THEME);
     $("theme-btn").textContent = THEME === "dark" ? "☀" : "🌙";
 }
-function toggleTheme() {
+applyTheme();
+$("theme-btn").onclick = function() {
     THEME = THEME === "light" ? "dark" : "light";
     localStorage.setItem("cch_theme", THEME);
     applyTheme();
-}
-applyTheme();
+};
 
-// ---- api ----
-
+// api
 function api(method, path, body) {
     var h = { "Content-Type": "application/json", "Authorization": "Bearer " + TOKEN };
     var o = { method: method, headers: h };
@@ -41,82 +38,69 @@ function ago(ms) {
     return Math.floor(d / 86400000) + "d ago";
 }
 function fmt(ms) { return new Date(ms).toLocaleString(); }
-function esc(s) { return (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
 
-// ---- session list ----
-
+// sessions & machines
 function loadSessions() {
     api("GET", "/v1/sessions").then(function(data) {
-        var div = $("slist");
         $("scount").textContent = data.sessions.length;
-        div.innerHTML = "";
-        if (data.sessions.length === 0) {
-            div.innerHTML = "<div class=\"empty\">No sessions yet</div>";
-            return;
-        }
+        var div = $("slist");
+        div.innerHTML = data.sessions.length ? "" : "<div class=\"empty\">No sessions yet</div>";
         data.sessions.forEach(function(s) {
-            var el = document.createElement("div");
-            el.className = "item" + (s.id === currentSessionId ? " active" : "");
-            el.innerHTML =
-                "<div><span class=\"badge " + (s.active ? "badge-active" : "badge-idle") + "\">" + (s.active ? "Active" : "Idle") + "</span> <span class=\"sub\">" + ago(s.activeAt) + "</span></div>" +
-                "<div class=\"sub\">" + esc(s.metadata || "—") + " · " + s.id.slice(0,10) + "</div>";
-            el.onclick = function() { selectSession(s.id); };
-            div.appendChild(el);
+            var c = document.createElement("div");
+            c.className = "card" + (s.id === currentSessionId ? " selected" : "");
+            c.innerHTML =
+                '<div class="title">' + (s.metadata || s.id.slice(0,10)).replace(/[&<>]/g,"") + '</div>' +
+                '<div class="meta"><span class="badge ' + (s.active ? "badge-active" : "badge-idle") + '">' + (s.active ? "Active" : "Idle") + '</span> · ' + ago(s.activeAt) + '</div>';
+            c.onclick = function() { selectSession(s.id); };
+            div.appendChild(c);
         });
     });
 }
 
 function loadMachines() {
     api("GET", "/v1/machines").then(function(data) {
-        var div = $("mlist");
         var ms = Array.isArray(data) ? data : [];
         $("mcount").textContent = ms.length;
+        var div = $("mlist");
         div.innerHTML = "";
         ms.forEach(function(m) {
-            var el = document.createElement("div");
-            el.className = "item";
-            el.innerHTML = "<div>" + esc(m.id) + "</div><div class=\"sub\">" + ago(m.activeAt) + "</div>";
-            div.appendChild(el);
+            var c = document.createElement("div");
+            c.className = "card";
+            c.innerHTML = '<div class="title">' + m.id.replace(/[&<>]/g,"") + '</div><div class="meta">' + ago(m.activeAt) + '</div>';
+            div.appendChild(c);
         });
     });
 }
 
-// ---- session detail ----
-
+// session detail
 function selectSession(id) {
     currentSessionId = id;
-    $("no-selection").classList.add("hidden");
-    $("detail-head").classList.remove("hidden");
-    $("detail-head").innerHTML = "<strong>Session</strong> <code>" + id.slice(0,12) + "</code>";
-    $("term").classList.add("active");
-    $("term-input").classList.add("active");
-    $("term").innerHTML = "<div style=\"color:var(--fg2)\">Loading messages...</div>";
+    $("no-selection").style.display = "none";
+    $("term-container").classList.add("active");
+    $("term-header").innerHTML = '<strong>Session</strong> <code style="font-size:12px">' + id.slice(0,12) + '</code>';
+    $("term-body").innerHTML = '<span style="color:var(--fg2)">Loading...</span>';
     loadMessages();
-    // Highlight sidebar
-    document.querySelectorAll("#slist .item").forEach(function(el) { el.classList.remove("active"); });
-    var match = document.querySelector("#slist .item");
-    // re-render
     loadSessions();
 }
 
 function loadMessages() {
     if (!currentSessionId) return;
     api("GET", "/v1/sessions/" + currentSessionId + "/plaintext-messages").then(function(data) {
-        var term = $("term");
+        var body = $("term-body");
         if (data.messages.length === 0) {
-            term.innerHTML = "<div style=\"color:var(--fg2)\">No messages yet. Start a ccd session to see conversation here.</div>";
+            body.innerHTML = '<span style="color:var(--fg2)">No messages yet.</span>';
             return;
         }
-        term.innerHTML = "";
+        body.innerHTML = "";
         data.messages.forEach(function(m) {
-            var div = document.createElement("div");
-            div.className = "term-msg role-" + m.role;
-            div.innerHTML = "<span style=\"color:var(--fg2);font-size:11px\">[" + m.role + "] " + fmt(m.createdAt) + "</span>\n" + esc(m.content);
-            term.appendChild(div);
+            var d = document.createElement("div");
+            d.className = "msg " + m.role;
+            d.innerHTML = '<div class="role">' + m.role + '</div><div class="content">' + esc(m.content) + '</div>';
+            body.appendChild(d);
         });
-        term.scrollTop = term.scrollHeight;
+        body.scrollTop = body.scrollHeight;
     }).catch(function(e) {
-        $("term").innerHTML = "<div style=\"color:var(--fg2)\">Cannot load messages: " + e.message + "</div>";
+        $("term-body").innerHTML = '<span style="color:var(--fg2)">Cannot load messages.</span>';
     });
 }
 
@@ -125,21 +109,16 @@ function sendMessage() {
     var text = input.value.trim();
     if (!text || !currentSessionId) return;
     input.value = "";
-    // Show locally
-    var term = $("term");
-    var div = document.createElement("div");
-    div.className = "term-msg role-user";
-    div.innerHTML = "<span style=\"color:var(--fg2);font-size:11px\">[user] just now</span>\n" + esc(text);
-    term.appendChild(div);
-    term.scrollTop = term.scrollHeight;
-    // Send to server
-    api("POST", "/v1/sessions/" + currentSessionId + "/plaintext-messages", { role: "user", content: text }).catch(function(e) {
-        console.error(e);
-    });
+    var body = $("term-body");
+    var d = document.createElement("div");
+    d.className = "msg user";
+    d.innerHTML = '<div class="role">user</div><div class="content">' + esc(text) + '</div>';
+    body.appendChild(d);
+    body.scrollTop = body.scrollHeight;
+    api("POST", "/v1/sessions/" + currentSessionId + "/plaintext-messages", { role: "user", content: text }).catch(function(e) { console.error(e); });
 }
 
-// ---- connect / logout ----
-
+// connect
 function connect() {
     var input = $("connect-input").value.trim();
     if (!input) return;
@@ -147,122 +126,100 @@ function connect() {
     if (input.indexOf("?token=") !== -1) {
         token = input.split("?token=")[1];
         if (input.indexOf("://") !== -1) {
-            var s = input.indexOf("://") + 3;
-            var e = input.indexOf("/", s);
+            var s = input.indexOf("://") + 3, e = input.indexOf("/", s);
             SERVER = input.substring(0, e);
             localStorage.setItem("cch_server", SERVER);
         }
     }
     token = token.replace(/[\s\\"']/g, "");
-    var btn = $("connect-btn");
-    var err = $("connect-error");
-    err.textContent = "";
-    btn.textContent = "Connecting...";
-    btn.disabled = true;
+    var btn = $("connect-btn"), err = $("connect-error");
+    err.textContent = ""; btn.textContent = "Connecting..."; btn.disabled = true;
 
     fetch(SERVER + "/v1/auth/bootstrap", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token: token, hostname: "web" })
     }).then(function(r) {
-        if (!r.ok) return r.json().then(function(e) { throw new Error(e.error || "Invalid token"); });
+        if (!r.ok) return r.json().then(function(e) { throw new Error(e.error || "Invalid"); });
         return r.json();
-    }).then(function(data) {
-        TOKEN = data.token;
-        ACCOUNT_ID = data.accountId;
+    }).then(function(d) {
+        TOKEN = d.token; ACCOUNT_ID = d.accountId;
         localStorage.setItem("cch_token", TOKEN);
         localStorage.setItem("cch_account_id", ACCOUNT_ID);
         showDashboard();
     }).catch(function(e) {
-        err.textContent = e.message;
-        btn.textContent = "Connect";
-        btn.disabled = false;
+        err.textContent = e.message; btn.textContent = "Connect"; btn.disabled = false;
     });
 }
 
 function showDashboard() {
     $("connect-screen").style.display = "none";
-    $("main-screen").style.display = "flex";
-    $("acct-display").textContent = ACCOUNT_ID.slice(0, 12) + "...";
-    refresh();
-    refreshTimer = setInterval(refresh, 30000);
+    $("dashboard").classList.remove("hidden");
+    $("dashboard").style.display = "flex";
+    $("acct-display").textContent = ACCOUNT_ID.slice(0,12) + "...";
+    refresh(); refreshTimer = setInterval(refresh, 30000);
 }
 
 function logout() {
-    localStorage.removeItem("cch_token");
-    localStorage.removeItem("cch_account_id");
+    ["cch_token","cch_account_id"].forEach(function(k) { localStorage.removeItem(k); });
     TOKEN = ""; ACCOUNT_ID = ""; currentSessionId = null;
-    $("main-screen").style.display = "none";
-    $("connect-screen").style.display = "flex";
-    $("connect-btn").textContent = "Connect";
-    $("connect-btn").disabled = false;
+    $("dashboard").classList.add("hidden"); $("connect-screen").style.display = "flex";
+    $("connect-btn").textContent = "Connect"; $("connect-btn").disabled = false;
     if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
 }
 
 function refresh() { loadSessions(); loadMachines(); loadTokens(); if (currentSessionId) loadMessages(); }
 
-// ---- tokens ----
-
+// tokens
 function generateToken() {
-    var label = $("tk-label").value.trim();
-    var body = {};
+    var label = $("tk-label").value.trim(), body = {};
     if (label) body.label = label;
     $("tk-error").textContent = "";
     api("POST", "/v1/bootstrap-tokens", body).then(function(data) {
         var conn = SERVER + "/connect?token=" + data.token;
-        $("new-conn").textContent = conn;
-        $("new-tk-area").classList.remove("hidden");
+        $("new-conn").textContent = conn; $("new-tk-area").classList.remove("hidden");
         $("tk-label").value = "";
-        var saved = JSON.parse(localStorage.getItem("cch_tokens") || "{}");
-        saved[data.record.id] = conn;
-        localStorage.setItem("cch_tokens", JSON.stringify(saved));
+        var s = JSON.parse(localStorage.getItem("cch_tokens") || "{}");
+        s[data.record.id] = conn; localStorage.setItem("cch_tokens", JSON.stringify(s));
         loadTokens();
     }).catch(function(e) { $("tk-error").textContent = e.message; });
 }
 
 function loadTokens() {
     api("GET", "/v1/bootstrap-tokens").then(function(data) {
-        var div = $("tk-list");
-        var active = (data.tokens || []).filter(function(t) { return !t.revokedAt; });
-        if (active.length === 0) { div.innerHTML = ""; return; }
-        var saved = JSON.parse(localStorage.getItem("cch_tokens") || "{}");
-        var html = "";
+        var active = (data.tokens||[]).filter(function(t){return !t.revokedAt;});
+        var saved = JSON.parse(localStorage.getItem("cch_tokens")||"{}"), html = "";
         active.forEach(function(t) {
-            html += "<div style=\"font-size:11px;margin-top:4px\">" + esc(t.label||"—") + " " + fmt(t.createdAt);
-            if (saved[t.id]) html += " <button class=\"btn-sm\" onclick=\"copyText('" + saved[t.id].replace(/'/g,"\\'") + "')\">Copy</button>";
-            html += " <button class=\"btn-sm danger\" onclick=\"revokeToken('" + t.id + "')\">Revoke</button>";
-            html += "</div>";
+            html += '<div style="margin-top:4px">' + (t.label||"—") + " " + fmt(t.createdAt);
+            if (saved[t.id]) html += ' <button style="font-size:11px;padding:2px 6px;border:1px solid var(--bd);border-radius:4px;cursor:pointer" onclick="copyText(\'' + saved[t.id].replace(/'/g,"\\'") + '\')">Copy</button>';
+            html += ' <button style="font-size:11px;padding:2px 6px;border:1px solid var(--red);border-radius:4px;color:var(--red);cursor:pointer" onclick="revokeToken(\'' + t.id + '\')">×</button>';
+            html += '</div>';
         });
-        div.innerHTML = html;
+        $("tk-list").innerHTML = html;
     }).catch(function(){});
 }
 
-function revokeToken(id) {
-    if (!confirm("Revoke this token?")) return;
-    api("POST", "/v1/bootstrap-tokens/" + id + "/revoke").then(function() { loadTokens(); });
-}
+function revokeToken(id) { if(confirm("Revoke?")) api("POST","/v1/bootstrap-tokens/"+id+"/revoke").then(loadTokens); }
 
 function copyText(txt) {
-    if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(txt);
-    var ta = document.createElement("textarea");
-    ta.value = txt; ta.style.position = "fixed"; ta.style.left = "-9999px";
-    document.body.appendChild(ta); ta.select(); document.execCommand("copy"); document.body.removeChild(ta);
+    if (navigator.clipboard&&navigator.clipboard.writeText) return navigator.clipboard.writeText(txt);
+    var ta=document.createElement("textarea");ta.value=txt;ta.style.position="fixed";ta.style.left="-9999px";
+    document.body.appendChild(ta);ta.select();document.execCommand("copy");document.body.removeChild(ta);
     return Promise.resolve();
 }
 
-// ---- events ----
+function esc(s) { return (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
 
+// events
 $("connect-btn").onclick = connect;
-$("connect-input").onkeydown = function(e) { if (e.key === "Enter") connect(); };
-$("theme-btn").onclick = toggleTheme;
+$("connect-input").onkeydown = function(e) { if (e.key==="Enter") connect(); };
 $("refresh-btn").onclick = refresh;
 $("logout-btn").onclick = logout;
 $("gen-tk-btn").onclick = generateToken;
-$("tk-label").onkeydown = function(e) { if (e.key === "Enter") generateToken(); };
+$("tk-label").onkeydown = function(e) { if (e.key==="Enter") generateToken(); };
 $("copy-tk-btn").onclick = function() { copyText($("new-conn").textContent); };
 $("send-btn").onclick = sendMessage;
-$("msg-input").onkeydown = function(e) { if (e.key === "Enter") sendMessage(); };
+$("msg-input").onkeydown = function(e) { if (e.key==="Enter") sendMessage(); };
 
-var urlToken = new URLSearchParams(window.location.search).get("token");
-if (urlToken) { $("connect-input").value = window.location.href; }
-if (TOKEN) { showDashboard(); }
+var ut = new URLSearchParams(window.location.search).get("token");
+if (ut) $("connect-input").value = window.location.href;
+if (TOKEN) showDashboard();
