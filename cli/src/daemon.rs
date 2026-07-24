@@ -69,8 +69,8 @@ async fn run_daemon() -> Result<()> {
     let machine = hostname();
     println!("ccd: connecting to {} as {}", hc.server, machine);
 
-    let socket = ClientBuilder::new(hc.server.clone())
-        .path("/v1/updates")
+    let socket_url = format!("{}/v1/updates", hc.server);
+    let socket = ClientBuilder::new(socket_url)
         .auth(json!({
             "token": auth_token,
             "clientType": "machine-scoped",
@@ -121,14 +121,18 @@ async fn run_daemon() -> Result<()> {
                 })).await {
                     eprintln!("ccd: state update error: {e}");
                 }
-                // Sync JSONL messages from tracking files
-                sync_session_messages(&hc.server, &auth_token, &machine).await;
+                // Sync JSONL messages from tracking files (blocking HTTP in async context)
+                let srv = hc.server.clone();
+                let tok = auth_token.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    sync_session_messages_blocking(&srv, &tok);
+                }).await;
             }
         }
     }
 }
 
-async fn sync_session_messages(server: &str, auth: &str, _machine: &str) {
+fn sync_session_messages_blocking(server: &str, auth: &str) {
     let track_dir = dirs::home_dir().unwrap_or_default().join(".cch").join("sessions");
     if !track_dir.exists() { return; }
     let claude_dir = dirs::home_dir().unwrap_or_default().join(".claude").join("projects");
