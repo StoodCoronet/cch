@@ -70,8 +70,7 @@ async fn run_daemon() -> Result<()> {
     println!("ccd: connecting to {} as {}", hc.server, machine);
 
     let socket = ClientBuilder::new(hc.server.clone())
-        .namespace("/v1/updates")
-        .transport_type(rust_socketio::TransportType::Websocket)
+        .path("/v1/updates")
         .auth(json!({
             "token": auth_token,
             "clientType": "machine-scoped",
