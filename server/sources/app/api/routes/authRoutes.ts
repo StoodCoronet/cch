@@ -6,8 +6,7 @@ import { auth } from "@/app/auth/auth";
 import { log } from "@/utils/log";
 import { verifyBootstrapToken } from "@/app/auth/bootstrapToken";
 import { randomBytes } from "node:crypto";
-import { kvGet } from "@/app/kv/kvGet";
-import { PASSWORD_KV_KEY, verifyPassword, decodePasswordRecord } from "@/app/auth/password";
+import { verifyPassword, deserializePasswordRecord, type PasswordRecord } from "@/app/auth/password";
 
 export function authRoutes(app: Fastify) {
     app.post('/v1/auth', {
@@ -295,18 +294,13 @@ export function authRoutes(app: Fastify) {
         const account = await db.account.findUnique({
             where: { username },
         });
-        if (!account) {
+        if (!account || !account.passwordHash) {
             return reply.code(401).send({ error: 'Invalid username or password' });
         }
 
-        const record = await kvGet({ uid: account.id }, PASSWORD_KV_KEY);
-        if (!record) {
-            return reply.code(401).send({ error: 'Password not set for this account' });
-        }
-
-        let parsed: ReturnType<typeof decodePasswordRecord>;
+        let parsed: PasswordRecord;
         try {
-            parsed = decodePasswordRecord(record.value);
+            parsed = deserializePasswordRecord(account.passwordHash);
         } catch {
             return reply.code(500).send({ error: 'Failed to read password record' });
         }

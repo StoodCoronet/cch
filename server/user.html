@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="light">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -153,9 +153,11 @@ button,input,textarea,select{font-family:inherit;font-size:inherit}
 .connect-card .logo-wrap .logo-mark{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--accent),var(--accent-light))}
 .connect-card h1{font-size:24px;font-weight:700;text-align:center}
 .connect-card p{text-align:center;color:var(--fg-secondary);margin:8px 0 20px;font-size:14px}
-.connect-tabs{display:flex;gap:6px;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:4px;margin-bottom:18px}
+.connect-tabs{display:flex;gap:6px;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:4px;margin-bottom:18px;position:relative}
 .connect-tab{flex:1;padding:8px;border-radius:7px;border:none;background:transparent;color:var(--fg-secondary);font-size:14px;font-weight:600;cursor:pointer;transition:all .15s}
-.connect-tab.active{background:var(--bg-elevated);color:var(--fg);box-shadow:0 1px 2px rgba(0,0,0,.1)}
+.connect-tab:hover{color:var(--fg)}
+.connect-tab.active{background:var(--accent);color:#fff;box-shadow:0 2px 8px rgba(79,70,229,.35)}
+.connect-tab.active:hover{background:var(--accent-hover)}
 .connect-form{display:none}
 .connect-form.active{display:block}
 .connect-card input{width:100%;padding:12px 14px;border-radius:10px;border:1px solid var(--border);background:var(--bg);color:var(--fg);margin-bottom:12px;outline:none;transition:border .15s}
@@ -228,19 +230,19 @@ button,input,textarea,select{font-family:inherit;font-size:inherit}
       <div class="logo-wrap"><div class="logo-mark"></div><h1>CCH</h1></div>
       <p>Connect to your self-hosted server</p>
       <div class="connect-tabs">
-        <button class="connect-tab active" data-target="password-form">Password</button>
-        <button class="connect-tab" data-target="token-form">Token</button>
+        <button class="connect-tab active" data-target="token-form">Token</button>
+        <button class="connect-tab" data-target="password-form">Password</button>
       </div>
-      <div class="connect-form active" id="password-form">
-        <input id="login-username" type="text" placeholder="Username" autofocus>
+      <div class="connect-form active" id="token-form">
+        <input id="connect-input" type="text" placeholder="Paste connection string or token..." autofocus>
+        <button id="connect-btn">Connect</button>
+        <p class="error" id="connect-error"></p>
+      </div>
+      <div class="connect-form" id="password-form">
+        <input id="login-username" type="text" placeholder="Username">
         <input id="login-password" type="password" placeholder="Password">
         <button id="login-btn">Sign In</button>
         <p class="error" id="login-error"></p>
-      </div>
-      <div class="connect-form" id="token-form">
-        <input id="connect-input" type="text" placeholder="Paste connection string or token...">
-        <button id="connect-btn">Connect</button>
-        <p class="error" id="connect-error"></p>
       </div>
     </div>
   </div>

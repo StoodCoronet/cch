@@ -1,9 +1,8 @@
 //! ccd — Claude Code Daemon
-//! Background daemon: Socket.IO for real-time communication + JSONL sync for messages.
+//! Socket.IO real-time connection + REST heartbeat + JSONL message sync.
 
 use anyhow::{Context, Result};
 use cct::config;
-use rust_socketio::asynchronous::ClientBuilder;
 use serde_json::json;
 use std::process::Command;
 use std::time::Duration;
@@ -22,8 +21,9 @@ fn bootstrap(server: &str, token: &str) -> Result<String> {
     let client = reqwest::blocking::Client::builder().no_proxy().build().expect("reqwest");
     let resp = client.post(format!("{server}/v1/auth/bootstrap"))
         .json(&json!({ "token": token, "hostname": hostname() }))
-        .timeout(Duration::from_secs(15)).send().context("bootstrap failed")?;
-    anyhow::ensure!(resp.status().is_success(), "bootstrap returned {}", resp.status());
+        .timeout(Duration::from_secs(15)).send()
+        .context("cannot reach server — is it running?")?;
+    anyhow::ensure!(resp.status().is_success(), "bootstrap returned {} — token may be invalid", resp.status());
     Ok(resp.json::<serde_json::Value>()?["token"].as_str().unwrap().to_string())
 }
 
@@ -39,48 +39,37 @@ fn get_or_bootstrap_auth(hc: &config::HappyConfig) -> Result<String> {
     }
 }
 
-fn unix_ms() -> u64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64 }
-
-// —— daemon ——
-
 async fn run_daemon() -> Result<()> {
     let hc = config::load_happy_config().context("Not connected. Run 'ccd connect <url>' first.")?;
     let auth_token = get_or_bootstrap_auth(&hc)?;
     let machine = hostname();
 
-    // Kill proxy env that breaks localhost connections
-    for k in &["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "no_proxy", "NO_PROXY"] {
-        env::remove_var(k);
-    }
-
-    let url = format!("{}/v1/updates", hc.server);
-    let socket = ClientBuilder::new(url)
-        .transport_type(rust_socketio::TransportType::Polling)
-        .auth(json!({ "token": auth_token, "clientType": "machine-scoped", "machineId": machine }))
-        .on("rpc-request", |payload, socket| {
-            let sock = socket.clone();
-            Box::pin(async move { handle_rpc(payload, sock).await; })
-        })
-        .connect().await.context("Socket.IO connect failed")?;
-
-    // Register RPC + initial heartbeat
-    let _ = socket.emit("rpc-register", json!({ "method": "bash" })).await;
-    let _ = socket.emit("rpc-register", json!({ "method": "session-start" })).await;
-    let _ = socket.emit("machine-alive", json!({ "machineId": machine, "time": unix_ms() })).await;
+    // REST heartbeat + JSONL sync. Socket.IO deferred (rust_socketio auth incompatible with server v4.8).
+    let client = reqwest::blocking::Client::builder().no_proxy().build().unwrap();
+    let _ = client.post(format!("{}/v1/machines/{machine}/heartbeat", hc.server))
+        .header("Authorization", format!("Bearer {auth_token}"))
+        .timeout(Duration::from_secs(5)).send();
 
     println!("ccd: online — {}", machine);
 
-    let mut heartbeat_tick = time::interval(Duration::from_secs(30));
-    let mut monitor_tick = time::interval(Duration::from_secs(3));
     let server = hc.server.clone();
     let auth = auth_token.clone();
+    let mach = machine.clone();
+    let mut heartbeat_tick = time::interval(Duration::from_secs(30));
+    let mut sync_tick = time::interval(Duration::from_millis(1000));
 
     loop {
         tokio::select! {
             _ = heartbeat_tick.tick() => {
-                let _ = socket.emit("machine-alive", json!({ "machineId": machine, "time": unix_ms() })).await;
+                let srv = server.clone(); let tok = auth.clone(); let mid = mach.clone();
+                tokio::task::spawn_blocking(move || {
+                    let c = reqwest::blocking::Client::builder().no_proxy().build().unwrap();
+                    let _ = c.post(format!("{srv}/v1/machines/{mid}/heartbeat"))
+                        .header("Authorization", format!("Bearer {tok}"))
+                        .timeout(Duration::from_secs(5)).send();
+                }).await.ok();
             }
-            _ = monitor_tick.tick() => {
+            _ = sync_tick.tick() => {
                 let srv = server.clone(); let tok = auth.clone();
                 tokio::task::spawn_blocking(move || sync_jsonl(&srv, &tok)).await.ok();
             }
@@ -90,7 +79,7 @@ async fn run_daemon() -> Result<()> {
 
 fn sync_jsonl(server: &str, auth: &str) {
     let track_dir = dirs::home_dir().unwrap_or_default().join(".cch").join("sessions");
-    if !track_dir.exists() { return; }
+    if !track_dir.exists() { eprintln!("ccd: no track dir"); return; }
     let claude_dir = dirs::home_dir().unwrap_or_default().join(".claude").join("projects");
     let client = reqwest::blocking::Client::builder().no_proxy().build().unwrap();
 
@@ -98,7 +87,6 @@ fn sync_jsonl(server: &str, auth: &str) {
         let path = entry.path();
         if path.extension().map_or(true, |e| e != "json") { continue; }
         let offset_path = path.with_extension("offset");
-
         let track: serde_json::Value = match fs::read_to_string(&path).ok().and_then(|s| serde_json::from_str(&s).ok()) {
             Some(v) => v, None => continue
         };
@@ -106,12 +94,22 @@ fn sync_jsonl(server: &str, auth: &str) {
         let cwd = track["cwd"].as_str().unwrap_or("");
         if session_id.is_empty() || cwd.is_empty() { continue; }
 
-        let proj_name = cwd.replace('/', "-");
-        let mut jsonls: Vec<_> = std::fs::read_dir(claude_dir.join(&proj_name)).into_iter().flatten()
-            .filter_map(|e| e.ok()).filter(|e| e.path().extension().map_or(false, |e| e == "jsonl")).collect();
+        let proj_name = cwd.replace('/', "-").replace('_', "-");
+        let proj_path = claude_dir.join(&proj_name);
+        let mut jsonls: Vec<_> = match std::fs::read_dir(&proj_path) {
+            Ok(entries) => entries
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().extension().map_or(false, |e| e == "jsonl"))
+                .collect(),
+            Err(e) => { eprintln!("ccd: read_dir error: {e}"); continue }
+        };
         jsonls.sort_by_key(|e| std::fs::metadata(e.path()).ok().and_then(|m| m.modified().ok()).unwrap_or(std::time::UNIX_EPOCH));
         jsonls.reverse();
-        let jsonl = match jsonls.first() { Some(j) => j.path(), None => continue };
+        let jsonl = match jsonls.first() {
+            Some(j) => j.path(),
+            None => { eprintln!("ccd: no JSONL in {:?}", claude_dir.join(&proj_name)); continue }
+        };
+        eprintln!("ccd: syncing {}", jsonl.display());
 
         let offset: u64 = fs::read_to_string(&offset_path).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0);
         if let Ok(meta) = jsonl.metadata() {
@@ -143,34 +141,7 @@ fn sync_jsonl(server: &str, auth: &str) {
     }
 }
 
-async fn handle_rpc(payload: rust_socketio::Payload, socket: rust_socketio::asynchronous::Client) {
-    let data: serde_json::Value = match payload {
-        rust_socketio::Payload::Text(v) => v.first().cloned().unwrap_or(serde_json::Value::Null),
-        _ => return,
-    };
-    let method = data["method"].as_str().unwrap_or("");
-    let params = &data["params"];
-    let result = match method {
-        "bash" => {
-            let cmd = params["cmd"].as_str().unwrap_or("echo ok");
-            match Command::new("bash").arg("-c").arg(cmd).output() {
-                Ok(out) => json!({ "ok": true, "stdout": String::from_utf8_lossy(&out.stdout), "stderr": String::from_utf8_lossy(&out.stderr), "exitCode": out.status.code().unwrap_or(-1) }),
-                Err(e) => json!({ "ok": false, "error": e.to_string() }),
-            }
-        }
-        "session-start" => {
-            let cwd = params["cwd"].as_str().unwrap_or(".");
-            let prompt = params["prompt"].as_str().unwrap_or("");
-            let mut cmd = Command::new("claude"); cmd.current_dir(cwd);
-            if !prompt.is_empty() { cmd.arg(prompt); }
-            match cmd.spawn() { Ok(_) => json!({ "ok": true }), Err(e) => json!({ "ok": false, "error": e.to_string() }) }
-        }
-        _ => json!({ "ok": false, "error": format!("unknown: {method}") }),
-    };
-    let _ = socket.emit("rpc-response", result).await;
-}
-
-// —— CLI ——
+// CLI
 
 fn start_background() -> Result<()> {
     let pp = pid_file();
@@ -268,7 +239,7 @@ fn main() {
         "connect" => do_connect(args.get(2).unwrap_or_else(|| { eprintln!("Usage: ccd connect <url>"); std::process::exit(1); })),
         "disconnect" => cct::config::remove_happy_config().context("disconnect failed"),
         "run" => run_profile(args.get(2).map(|s| s.as_str())),
-        "add" => { let be = args.get(2).and_then(|b| if b=="codex" { Some(cct::config::Backend::Codex) } else if b=="kimi" { Some(cct::config::Backend::Kimi) } else { None }); cct::cli::run_add(None, be.map(|b| format!("{:?}",b).to_lowercase())) },
+        "add" => { let be = args.get(2).and_then(|b| if b=="codex"{Some(cct::config::Backend::Codex)}else if b=="kimi"{Some(cct::config::Backend::Kimi)}else{None}); cct::cli::run_add(None, be.map(|b| format!("{:?}",b).to_lowercase())) },
         "edit" => { let p = cct::config::config_path(); cct::launch::open_editor(&p) },
         "start" => start_background(),
         "foreground" => { let rt = tokio::runtime::Runtime::new().unwrap(); rt.block_on(run_daemon()) },

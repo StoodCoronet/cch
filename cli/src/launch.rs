@@ -169,13 +169,20 @@ fn client() -> reqwest::blocking::Client {
 }
 
 fn bootstrap(server: &str, bootstrap_token: &str, hostname: &str) -> Result<BootstrapResp> {
-    let resp = client()
+    let resp = match client()
         .post(format!("{server}/v1/auth/bootstrap"))
         .json(&BootstrapReq { token: bootstrap_token, hostname })
         .timeout(std::time::Duration::from_secs(15))
         .send()
-        .context("bootstrap request failed")?;
-    anyhow::ensure!(resp.status().is_success(), "bootstrap returned {}", resp.status());
+    {
+        Ok(r) => r,
+        Err(e) => {
+            if e.is_connect() { anyhow::bail!("cannot reach server at {server} — is it running?") }
+            if e.is_timeout() { anyhow::bail!("timeout connecting to {server}") }
+            anyhow::bail!("bootstrap failed: {e}");
+        }
+    };
+    anyhow::ensure!(resp.status().is_success(), "bootstrap returned {} — token may be invalid", resp.status());
     resp.json().context("bootstrap parse failed")
 }
 
