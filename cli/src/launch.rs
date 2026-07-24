@@ -96,7 +96,7 @@ pub fn exec_claude(profile: &Profile, with_continue: bool) -> anyhow::Error {
             Some(t) => t,
             None => {
                 let creds = bootstrap(&hc.server, &hc.token, &hostname)
-                    .unwrap_or_else(|e| { eprintln!("cch: bootstrap failed: {e}"); std::process::exit(1); });
+                    .unwrap_or_else(|e| { eprintln!("bootstrap failed: {e}"); std::process::exit(1); });
                 save_cached_token(&hc.server, &creds.token);
                 creds.token
             }
@@ -104,13 +104,24 @@ pub fn exec_claude(profile: &Profile, with_continue: bool) -> anyhow::Error {
 
         // Report machine
         if let Err(e) = report_machine(&hc.server, &token, &hostname) {
-            eprintln!("cch: machine report failed: {e}");
+            eprintln!("machine report failed: {e}");
         }
 
-        // Report session synchronously (must finish before exec replaces this process)
+        // Report session and write tracking file for message capture by daemon
         let cwd = env::current_dir().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
-        if let Err(e) = report_session(&hc.server, &token, &cwd, &hostname) {
-            eprintln!("cch: session report failed: {e}");
+        match report_session(&hc.server, &token, &cwd, &hostname) {
+            Ok(session_id) => {
+                // Write tracking file so daemon can sync messages
+                let track_dir = dirs::home_dir().unwrap_or_default().join(".cch").join("sessions");
+                let _ = fs::create_dir_all(&track_dir);
+                let track = serde_json::json!({
+                    "sessionId": session_id,
+                    "cwd": cwd,
+                    "hostname": hostname,
+                });
+                let _ = fs::write(track_dir.join(format!("{session_id}.json")), track.to_string());
+            }
+            Err(e) => eprintln!("session report failed: {e}"),
         }
 
         let err = Command::new("claude").args(&args).exec();
@@ -150,9 +161,15 @@ struct SessionReq<'a> {
     metadata: String,
 }
 
+fn client() -> reqwest::blocking::Client {
+    reqwest::blocking::Client::builder()
+        .no_proxy()
+        .build()
+        .expect("build reqwest client")
+}
+
 fn bootstrap(server: &str, bootstrap_token: &str, hostname: &str) -> Result<BootstrapResp> {
-    let client = reqwest::blocking::Client::new();
-    let resp = client
+    let resp = client()
         .post(format!("{server}/v1/auth/bootstrap"))
         .json(&BootstrapReq { token: bootstrap_token, hostname })
         .timeout(std::time::Duration::from_secs(15))
@@ -163,7 +180,7 @@ fn bootstrap(server: &str, bootstrap_token: &str, hostname: &str) -> Result<Boot
 }
 
 fn report_machine(server: &str, auth_token: &str, hostname: &str) -> Result<()> {
-    let client = reqwest::blocking::Client::new();
+    let client = client();
     let resp = client
         .post(format!("{server}/v1/machines"))
         .header("Authorization", format!("Bearer {auth_token}"))
@@ -175,8 +192,8 @@ fn report_machine(server: &str, auth_token: &str, hostname: &str) -> Result<()> 
     Ok(())
 }
 
-fn report_session(server: &str, auth_token: &str, cwd: &str, hostname: &str) -> Result<()> {
-    let client = reqwest::blocking::Client::new();
+fn report_session(server: &str, auth_token: &str, cwd: &str, hostname: &str) -> Result<String> {
+    let client = client();
     let tag = cwd.replace('/', "-").trim_start_matches('-').to_string();
     let resp = client
         .post(format!("{server}/v1/sessions"))
@@ -186,7 +203,8 @@ fn report_session(server: &str, auth_token: &str, cwd: &str, hostname: &str) -> 
         .send()
         .context("session report failed")?;
     anyhow::ensure!(resp.status().is_success(), "session report returned {}", resp.status());
-    Ok(())
+    let data: serde_json::Value = resp.json()?;
+    Ok(data["session"]["id"].as_str().unwrap_or("").to_string())
 }
 
 fn token_cache_path() -> PathBuf {

@@ -1,113 +1,182 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="light">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>CCH Admin</title>
 <style>
+:root {
+  --bg: #0d0d0d;
+  --bg-elevated: #171717;
+  --bg-hover: #1f1f1f;
+  --bg-active: #262626;
+  --bg-input: #1e1e1e;
+  --fg: #f5f5f5;
+  --fg-secondary: #a3a3a3;
+  --fg-tertiary: #737373;
+  --border: #262626;
+  --border-strong: #333333;
+  --accent: #4f46e5;
+  --accent-hover: #5b54e6;
+  --accent-light: #818cf8;
+  --green: #22c55e;
+  --green-bg: rgba(34,197,94,.12);
+  --red: #ef4444;
+  --shadow: 0 4px 24px rgba(0,0,0,.35);
+}
+[data-theme="light"] {
+  --bg: #fafafa;
+  --bg-elevated: #ffffff;
+  --bg-hover: #f3f4f6;
+  --bg-active: #e5e7eb;
+  --bg-input: #ffffff;
+  --fg: #171717;
+  --fg-secondary: #525252;
+  --fg-tertiary: #a3a3a3;
+  --border: #e5e5e5;
+  --border-strong: #d4d4d4;
+  --accent: #4f46e5;
+  --accent-hover: #4338ca;
+  --accent-light: #6366f1;
+  --green: #16a34a;
+  --green-bg: rgba(22,163,74,.1);
+  --red: #dc2626;
+  --shadow: 0 4px 24px rgba(0,0,0,.08);
+}
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:system-ui,sans-serif;background:#0f1117;color:#e1e4e8;max-width:900px;margin:0 auto;padding:24px 16px}
-h1{font-size:22px;margin-bottom:8px}
-h2{font-size:16px;margin:24px 0 12px;color:#8b949e;text-transform:uppercase;letter-spacing:.5px}
-input,button,select{font-size:14px;padding:8px 12px;border-radius:6px;border:1px solid #30363d;background:#161b22;color:#e1e4e8}
-button{cursor:pointer;background:#238636;border-color:#238636;font-weight:600}
-button:hover{background:#2ea043}
-button.danger{background:#da3633;border-color:#da3633}
-button.danger:hover{background:#f85149}
-button.small{font-size:12px;padding:4px 8px}
-.row{display:flex;gap:8px;margin-bottom:12px;align-items:center}
-.grow{flex:1}
-.card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px;margin-bottom:16px}
-.token-box{background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:12px;font-family:monospace;font-size:13px;word-break:break-all;margin:8px 0}
-.conn-box{background:#0d1117;border:1px solid #238636;border-radius:6px;padding:12px;font-family:monospace;font-size:13px;word-break:break-all;color:#7ee787;margin:8px 0}
-table{width:100%;border-collapse:collapse;font-size:13px}
-th,td{text-align:left;padding:8px 12px;border-bottom:1px solid #21262d}
-th{color:#8b949e;font-weight:600}
-.badge{display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600}
-.badge-active{background:#238636;color:#fff}
-.badge-revoked{background:#30363d;color:#8b949e}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;background:var(--bg);color:var(--fg);line-height:1.55;font-size:14.5px;min-height:100vh}
+button,input{font-family:inherit;font-size:inherit}
+.container{max-width:900px;margin:0 auto;padding:32px 20px}
+
+/* Login */
+#login-screen{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}
+.login-card{width:100%;max-width:380px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:18px;padding:32px;box-shadow:var(--shadow)}
+.login-card .logo-wrap{display:flex;align-items:center;justify-content:center;gap:12px;margin-bottom:8px}
+.login-card .logo-mark{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--accent),var(--accent-light))}
+.login-card h1{font-size:22px;font-weight:700;text-align:center}
+.login-card p{text-align:center;color:var(--fg-secondary);margin:6px 0 22px;font-size:14px}
+.login-card input{width:100%;padding:12px 14px;border-radius:10px;border:1px solid var(--border);background:var(--bg);color:var(--fg);margin-bottom:12px;outline:none;transition:border .15s}
+.login-card input:focus{border-color:var(--accent)}
+.login-card button{width:100%;padding:12px;border-radius:10px;border:none;background:var(--accent);color:#fff;font-weight:600;cursor:pointer;font-size:15px}
+.login-card button:hover{background:var(--accent-hover)}
+.error{color:var(--red);font-size:13px;margin-top:8px;text-align:center}
+
+/* Header */
+.admin-header{display:flex;align-items:center;gap:12px;margin-bottom:28px}
+.admin-header .logo{font-size:20px;font-weight:700;display:flex;align-items:center;gap:10px}
+.admin-header .logo::before{content:"";width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,var(--accent),var(--accent-light))}
+.admin-header .spacer{flex:1}
+.server-url{color:var(--fg-secondary);font-family:"SF Mono","Fira Code",monospace;font-size:12px}
+#theme-btn{width:36px;height:36px;border-radius:10px;border:1px solid var(--border);background:var(--bg-elevated);color:var(--fg);cursor:pointer;font-size:15px}
+#theme-btn:hover{background:var(--bg-hover)}
+
+/* Stats */
+.stats-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:32px}
+.stat-card{background:var(--bg-elevated);border:1px solid var(--border);border-radius:14px;padding:20px;box-shadow:var(--shadow);text-align:center}
+.stat-card .value{font-size:32px;font-weight:700;margin-bottom:4px}
+.stat-card .value.green{color:var(--green)}
+.stat-card .label{font-size:13px;color:var(--fg-secondary)}
+
+/* Section */
+.section{background:var(--bg-elevated);border:1px solid var(--border);border-radius:14px;padding:22px;box-shadow:var(--shadow)}
+.section h2{font-size:15px;font-weight:600;margin-bottom:16px}
+
+/* Create user */
+.create-row{display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap}
+.create-row input{flex:1;min-width:140px;padding:11px 13px;border-radius:10px;border:1px solid var(--border);background:var(--bg);color:var(--fg);outline:none;transition:border .15s}
+.create-row input:focus{border-color:var(--accent)}
+.create-row input::placeholder{color:var(--fg-tertiary)}
+.create-row button{padding:11px 18px;border-radius:10px;border:none;background:var(--accent);color:#fff;font-weight:600;cursor:pointer;font-size:14px}
+.create-row button:hover{background:var(--accent-hover)}
+
+/* Table */
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{padding:12px 10px;text-align:left;border-bottom:1px solid var(--border)}
+th{color:var(--fg-secondary);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.4px}
+tr:last-child td{border-bottom:none}
+.user-name{font-weight:500}
+.user-id{font-family:"SF Mono","Fira Code",monospace;font-size:11px;color:var(--fg-tertiary);margin-top:2px}
+.meter{height:6px;background:var(--bg);border-radius:3px;overflow:hidden;margin-top:6px;max-width:120px}
+.meter-fill{height:100%;background:var(--accent);border-radius:3px}
+.empty{text-align:center;color:var(--fg-tertiary);padding:28px 0;font-size:14px}
+
 .hidden{display:none!important}
-.error{color:#f85149;font-size:13px;margin-top:4px}
-#login-screen{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:60vh}
-#login-screen .card{width:100%;max-width:360px}
+
+@media (max-width: 640px) {
+  .stats-grid{grid-template-columns:1fr}
+  .create-row{flex-direction:column}
+  .create-row input{width:100%}
+  table{font-size:13px}
+  th,td{padding:10px 6px}
+}
 </style>
 </head>
 <body>
 <div id="login-screen">
-    <div class="card">
-        <h1>CCH Server Admin</h1>
-        <div class="row" style="margin-top:16px">
-            <input id="password-input" type="password" placeholder="Admin password" class="grow">
-            <button id="login-btn">Login</button>
-        </div>
+    <div class="login-card">
+        <div class="logo-wrap"><div class="logo-mark"></div><h1>CCH Admin</h1></div>
+        <p>Server administration</p>
+        <input id="password-input" type="password" placeholder="Admin password">
+        <button id="login-btn">Login</button>
         <p class="error" id="login-error"></p>
     </div>
 </div>
+
 <div id="main-screen" class="hidden">
-    <h1>CCH Server Admin</h1>
-    <div class="row">
-        <span style="color:#8b949e">Server:</span>
-        <span id="server-url-display"></span>
-    </div>
+    <div class="container">
+        <div class="admin-header">
+            <div class="logo">CCH Admin</div>
+            <div class="spacer"></div>
+            <div class="server-url" id="server-url-display"></div>
+            <button id="theme-btn" title="Toggle theme">☀</button>
+        </div>
 
-    <div class="row" style="gap:16px; margin-top:16px">
-        <div class="card" style="flex:1; text-align:center">
-            <div style="font-size:28px;font-weight:700" id="stat-accounts">—</div>
-            <div class="sub">Accounts</div>
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="value" id="stat-accounts">—</div>
+                <div class="label">Accounts</div>
+            </div>
+            <div class="stat-card">
+                <div class="value green" id="stat-active">—</div>
+                <div class="label">Active Sessions</div>
+            </div>
+            <div class="stat-card">
+                <div class="value" id="stat-total">—</div>
+                <div class="label">Total Sessions</div>
+            </div>
         </div>
-        <div class="card" style="flex:1; text-align:center">
-            <div style="font-size:28px;font-weight:700; color:#7ee787" id="stat-active">—</div>
-            <div class="sub">Active Sessions</div>
-        </div>
-        <div class="card" style="flex:1; text-align:center">
-            <div style="font-size:28px;font-weight:700" id="stat-total">—</div>
-            <div class="sub">Total Sessions</div>
-        </div>
-    </div>
 
-    <h2>Accounts</h2>
-    <div class="card">
-        <div class="row">
-            <input id="new-account-name" type="text" placeholder="Username" class="grow">
-            <button id="create-account-btn">Create Account</button>
+        <div class="section">
+            <h2>Accounts</h2>
+            <div class="create-row">
+                <input id="new-account-name" type="text" placeholder="Username">
+                <input id="new-account-password" type="password" placeholder="Password (optional)">
+                <button id="create-account-btn">Create Account</button>
+            </div>
+            <p class="error" id="account-error"></p>
+            <table id="accounts-table">
+                <thead>
+                    <tr>
+                        <th>User</th>
+                        <th>Sessions</th>
+                        <th>Share</th>
+                        <th>Created</th>
+                    </tr>
+                </thead>
+                <tbody id="accounts-tbody"></tbody>
+            </table>
         </div>
-        <p class="error" id="account-error"></p>
-        <table id="accounts-table" style="margin-top:12px">
-            <thead><tr><th>Username</th><th>Sessions</th><th>Created</th><th></th></tr></thead>
-            <tbody id="accounts-tbody"></tbody>
-        </table>
-    </div>
-
-    <h2>Bootstrap Tokens</h2>
-    <div class="card">
-        <div class="row">
-            <select id="token-account-select" class="grow"><option value="">Select an account...</option></select>
-            <input id="token-label" type="text" placeholder="Label (optional)" style="width:180px">
-            <button id="generate-token-btn">Generate Token</button>
-        </div>
-        <p class="error" id="token-error"></p>
-        <div id="new-token-display" class="hidden" style="margin-top:12px">
-            <p style="color:#7ee787;font-weight:600">Token created. Save it now.</p>
-            <div class="token-box" id="new-token-value"></div>
-            <p style="color:#8b949e;margin-top:8px">Connection string (copy and paste into cch):</p>
-            <div class="conn-box" id="new-conn-string"></div>
-            <button id="copy-conn-btn" class="small" style="margin-top:8px">Copy Connection String</button>
-        </div>
-        <table id="tokens-table" style="margin-top:12px">
-            <thead><tr><th>Label</th><th>Created</th><th>Status</th><th></th></tr></thead>
-            <tbody id="tokens-tbody"></tbody>
-        </table>
-        <p style="color:#8b949e;font-size:12px;margin-top:8px">Tokens: <span id="selected-account-label">&mdash;</span></p>
     </div>
 </div>
-<button id="theme-btn" class="small" style="position:fixed;top:12px;right:12px;z-index:99">🌙</button>
+
 <script src="/admin.js"></script>
 <script>
 (function(){
-  var t = localStorage.getItem("admin_theme") || "light";
+  var t = localStorage.getItem("admin_theme") || "dark";
   document.documentElement.setAttribute("data-theme", t);
-  document.getElementById("theme-btn").textContent = t === "dark" ? "☀" : "🌙";
-  document.getElementById("theme-btn").onclick = function() {
+  var btn = document.getElementById("theme-btn");
+  btn.textContent = t === "dark" ? "☀" : "🌙";
+  btn.onclick = function() {
     t = t === "light" ? "dark" : "light";
     localStorage.setItem("admin_theme", t);
     document.documentElement.setAttribute("data-theme", t);

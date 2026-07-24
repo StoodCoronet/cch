@@ -384,15 +384,16 @@ model VoiceConversation {
 //
 
 model BootstrapToken {
-    id        String    @id @default(cuid())
-    accountId String
-    account   Account   @relation(fields: [accountId], references: [id])
-    tokenHash String    @unique
-    label     String?
-    machineId String?
-    revokedAt DateTime?
-    createdAt DateTime  @default(now())
-    updatedAt DateTime  @updatedAt
+    id            String    @id @default(cuid())
+    accountId     String
+    account       Account   @relation(fields: [accountId], references: [id])
+    tokenHash     String    @unique
+    tokenPlaintext String?
+    label         String?
+    machineId     String?
+    revokedAt     DateTime?
+    createdAt     DateTime  @default(now())
+    updatedAt     DateTime  @updatedAt
 
     @@index([accountId])
 }
