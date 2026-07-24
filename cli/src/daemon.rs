@@ -148,31 +148,19 @@ async fn sync_session_messages(server: &str, auth: &str, _machine: &str) {
             let cwd = track["cwd"].as_str().unwrap_or("");
             if session_id.is_empty() || cwd.is_empty() { continue; }
 
-            // Find JSONL file in claude projects directory
-            // Try to find the claude project directory for this CWD
-            // Scan all projects dirs for JSONL files modified in last 30 min
-            let mut found_jsonl: Option<std::path::PathBuf> = None;
-            if let Ok(projects) = std::fs::read_dir(&claude_dir) {
-                for p in projects.flatten() {
-                    if let Ok(entries) = std::fs::read_dir(p.path()) {
-                        for e in entries.flatten() {
-                            let ep = e.path();
-                            if ep.extension().map_or(false, |ext| ext == "jsonl") {
-                                if let Ok(meta) = ep.metadata() {
-                                    if let Ok(m) = meta.modified() {
-                                        let age = std::time::SystemTime::now()
-                                            .duration_since(m).unwrap_or_default();
-                                        if age.as_secs() < 1800 { // 30 min
-                                            found_jsonl = Some(ep.clone());
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            let jsonl = match found_jsonl { Some(j) => j, None => continue };
+            // Find the claude project directory for this CWD
+            let proj_name = cwd.replace('/', "-");
+            let proj_dir = claude_dir.join(&proj_name);
+            let mut jsonls: Vec<_> = std::fs::read_dir(&proj_dir).into_iter().flatten()
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().extension().map_or(false, |e| e == "jsonl"))
+                .collect();
+            // Sort by modification time, newest first
+            jsonls.sort_by_key(|e| std::fs::metadata(e.path()).ok()
+                .and_then(|m| m.modified().ok())
+                .unwrap_or(std::time::UNIX_EPOCH));
+            jsonls.reverse();
+            let jsonl = match jsonls.first() { Some(j) => j.path(), None => continue };
 
             // Read from last offset and sync new messages
             let offset: u64 = std::fs::read_to_string(&offset_path).ok()
