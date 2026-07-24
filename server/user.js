@@ -1,30 +1,144 @@
 var TOKEN = localStorage.getItem("cch_token") || "";
 var ACCOUNT_ID = localStorage.getItem("cch_account_id") || "";
 var SERVER = localStorage.getItem("cch_server") || window.location.origin;
-var $ = function(id) { return document.getElementById(id); };
+var THEME = localStorage.getItem("cch_theme") || "light";
+var currentSessionId = null;
 var refreshTimer = null;
 
+var $ = function(id) { return document.getElementById(id); };
+
+// ---- theme ----
+
+function applyTheme() {
+    document.documentElement.setAttribute("data-theme", THEME);
+    $("theme-btn").textContent = THEME === "dark" ? "☀" : "🌙";
+}
+function toggleTheme() {
+    THEME = THEME === "light" ? "dark" : "light";
+    localStorage.setItem("cch_theme", THEME);
+    applyTheme();
+}
+applyTheme();
+
+// ---- api ----
+
 function api(method, path, body) {
-    var headers = { "Content-Type": "application/json", "Authorization": "Bearer " + TOKEN };
-    var opts = { method: method, headers: headers };
-    if (body) opts.body = JSON.stringify(body);
-    return fetch(SERVER + path, opts).then(function(r) {
-        if (!r.ok) {
-            if (r.status === 401) { logout(); throw new Error("Session expired"); }
-            return r.json().then(function(e) { throw new Error(e.error || r.statusText); });
-        }
+    var h = { "Content-Type": "application/json", "Authorization": "Bearer " + TOKEN };
+    var o = { method: method, headers: h };
+    if (body) o.body = JSON.stringify(body);
+    return fetch(SERVER + path, o).then(function(r) {
+        if (r.status === 401) { logout(); throw new Error("expired"); }
+        if (!r.ok) return r.json().then(function(e) { throw new Error(e.error || r.statusText); });
         return r.json();
     });
 }
 
 function ago(ms) {
-    var diff = Date.now() - ms;
-    if (diff < 60000) return "just now";
-    if (diff < 3600000) return Math.floor(diff / 60000) + "m ago";
-    if (diff < 86400000) return Math.floor(diff / 3600000) + "h ago";
-    return Math.floor(diff / 86400000) + "d ago";
+    var d = Date.now() - ms;
+    if (d < 60000) return "just now";
+    if (d < 3600000) return Math.floor(d / 60000) + "m ago";
+    if (d < 86400000) return Math.floor(d / 3600000) + "h ago";
+    return Math.floor(d / 86400000) + "d ago";
 }
 function fmt(ms) { return new Date(ms).toLocaleString(); }
+function esc(s) { return (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+
+// ---- session list ----
+
+function loadSessions() {
+    api("GET", "/v1/sessions").then(function(data) {
+        var div = $("slist");
+        $("scount").textContent = data.sessions.length;
+        div.innerHTML = "";
+        if (data.sessions.length === 0) {
+            div.innerHTML = "<div class=\"empty\">No sessions yet</div>";
+            return;
+        }
+        data.sessions.forEach(function(s) {
+            var el = document.createElement("div");
+            el.className = "item" + (s.id === currentSessionId ? " active" : "");
+            el.innerHTML =
+                "<div><span class=\"badge " + (s.active ? "badge-active" : "badge-idle") + "\">" + (s.active ? "Active" : "Idle") + "</span> <span class=\"sub\">" + ago(s.activeAt) + "</span></div>" +
+                "<div class=\"sub\">" + esc(s.metadata || "—") + " · " + s.id.slice(0,10) + "</div>";
+            el.onclick = function() { selectSession(s.id); };
+            div.appendChild(el);
+        });
+    });
+}
+
+function loadMachines() {
+    api("GET", "/v1/machines").then(function(data) {
+        var div = $("mlist");
+        var ms = Array.isArray(data) ? data : [];
+        $("mcount").textContent = ms.length;
+        div.innerHTML = "";
+        ms.forEach(function(m) {
+            var el = document.createElement("div");
+            el.className = "item";
+            el.innerHTML = "<div>" + esc(m.id) + "</div><div class=\"sub\">" + ago(m.activeAt) + "</div>";
+            div.appendChild(el);
+        });
+    });
+}
+
+// ---- session detail ----
+
+function selectSession(id) {
+    currentSessionId = id;
+    $("no-selection").classList.add("hidden");
+    $("detail-head").classList.remove("hidden");
+    $("detail-head").innerHTML = "<strong>Session</strong> <code>" + id.slice(0,12) + "</code>";
+    $("term").classList.add("active");
+    $("term-input").classList.add("active");
+    $("term").innerHTML = "<div style=\"color:var(--fg2)\">Loading messages...</div>";
+    loadMessages();
+    // Highlight sidebar
+    document.querySelectorAll("#slist .item").forEach(function(el) { el.classList.remove("active"); });
+    var match = document.querySelector("#slist .item");
+    // re-render
+    loadSessions();
+}
+
+function loadMessages() {
+    if (!currentSessionId) return;
+    api("GET", "/v1/sessions/" + currentSessionId + "/plaintext-messages").then(function(data) {
+        var term = $("term");
+        if (data.messages.length === 0) {
+            term.innerHTML = "<div style=\"color:var(--fg2)\">No messages yet. Start a ccd session to see conversation here.</div>";
+            return;
+        }
+        term.innerHTML = "";
+        data.messages.forEach(function(m) {
+            var div = document.createElement("div");
+            div.className = "term-msg role-" + m.role;
+            div.innerHTML = "<span style=\"color:var(--fg2);font-size:11px\">[" + m.role + "] " + fmt(m.createdAt) + "</span>\n" + esc(m.content);
+            term.appendChild(div);
+        });
+        term.scrollTop = term.scrollHeight;
+    }).catch(function(e) {
+        $("term").innerHTML = "<div style=\"color:var(--fg2)\">Cannot load messages: " + e.message + "</div>";
+    });
+}
+
+function sendMessage() {
+    var input = $("msg-input");
+    var text = input.value.trim();
+    if (!text || !currentSessionId) return;
+    input.value = "";
+    // Show locally
+    var term = $("term");
+    var div = document.createElement("div");
+    div.className = "term-msg role-user";
+    div.innerHTML = "<span style=\"color:var(--fg2);font-size:11px\">[user] just now</span>\n" + esc(text);
+    term.appendChild(div);
+    term.scrollTop = term.scrollHeight;
+    // Send to server
+    api("POST", "/v1/sessions/" + currentSessionId + "/plaintext-messages", { role: "user", content: text }).catch(function(e) {
+        console.error(e);
+    });
+}
+
+// ---- connect / logout ----
 
 function connect() {
     var input = $("connect-input").value.trim();
@@ -39,7 +153,7 @@ function connect() {
             localStorage.setItem("cch_server", SERVER);
         }
     }
-    token = token.replace(/[\s"']/g, "");
+    token = token.replace(/[\s\\"']/g, "");
     var btn = $("connect-btn");
     var err = $("connect-error");
     err.textContent = "";
@@ -58,11 +172,7 @@ function connect() {
         ACCOUNT_ID = data.accountId;
         localStorage.setItem("cch_token", TOKEN);
         localStorage.setItem("cch_account_id", ACCOUNT_ID);
-        $("connect-screen").classList.add("hidden");
-        $("dashboard-screen").classList.remove("hidden");
-        $("account-id-display").textContent = ACCOUNT_ID.slice(0, 12) + "...";
-        refresh();
-        refreshTimer = setInterval(refresh, 30000);
+        showDashboard();
     }).catch(function(e) {
         err.textContent = e.message;
         btn.textContent = "Connect";
@@ -70,144 +180,61 @@ function connect() {
     });
 }
 
+function showDashboard() {
+    $("connect-screen").style.display = "none";
+    $("main-screen").style.display = "flex";
+    $("acct-display").textContent = ACCOUNT_ID.slice(0, 12) + "...";
+    refresh();
+    refreshTimer = setInterval(refresh, 30000);
+}
+
 function logout() {
     localStorage.removeItem("cch_token");
     localStorage.removeItem("cch_account_id");
-    TOKEN = "";
-    ACCOUNT_ID = "";
-    $("dashboard-screen").classList.add("hidden");
-    $("connect-screen").classList.remove("hidden");
+    TOKEN = ""; ACCOUNT_ID = ""; currentSessionId = null;
+    $("main-screen").style.display = "none";
+    $("connect-screen").style.display = "flex";
     $("connect-btn").textContent = "Connect";
     $("connect-btn").disabled = false;
     if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
 }
 
-function refresh() {
-    loadSessions();
-    loadMachines();
-    loadTokens();
-}
+function refresh() { loadSessions(); loadMachines(); loadTokens(); if (currentSessionId) loadMessages(); }
 
-function loadSessions() {
-    api("GET", "/v1/sessions").then(function(data) {
-        var tbody = $("sessions-tbody");
-        tbody.innerHTML = "";
-        $("session-count").textContent = "(" + data.sessions.length + ")";
-        if (data.sessions.length === 0) {
-            $("sessions-empty").classList.remove("hidden");
-            $("sessions-table").classList.add("hidden");
-            return;
-        }
-        $("sessions-empty").classList.add("hidden");
-        $("sessions-table").classList.remove("hidden");
-        data.sessions.forEach(function(s) {
-            var tr = document.createElement("tr");
-            var machine = s.metadata || "—";
-            tr.innerHTML =
-                "<td><code>" + s.id.slice(0, 12) + "</code></td>" +
-                "<td>" + machine.replace(/[&<>\"']/g, "") + "</td>" +
-                "<td><span class=\"badge " + (s.active ? "badge-active" : "badge-off") + "\">" + (s.active ? "Active" : "Idle") + "</span></td>" +
-                "<td>" + ago(s.activeAt) + "</td>" +
-                "<td>" + fmt(s.createdAt) + "</td>" +
-                "<td></td>";
-            var delBtn = document.createElement("button");
-            delBtn.className = "small danger";
-            delBtn.textContent = "Del";
-            delBtn.onclick = (function(sid) { return function() { deleteSession(sid); }; })(s.id);
-            tr.cells[5].appendChild(delBtn);
-            tbody.appendChild(tr);
-        });
-    }).catch(function(e) { console.error(e); });
-}
-
-function loadMachines() {
-    api("GET", "/v1/machines").then(function(data) {
-        var tbody = $("machines-tbody");
-        tbody.innerHTML = "";
-        var machines = Array.isArray(data) ? data : [];
-        $("machine-count").textContent = "(" + machines.length + ")";
-        if (machines.length === 0) {
-            $("machines-empty").classList.remove("hidden");
-            $("machines-table").classList.add("hidden");
-            return;
-        }
-        $("machines-empty").classList.add("hidden");
-        $("machines-table").classList.remove("hidden");
-        machines.forEach(function(m) {
-            var tr = document.createElement("tr");
-            tr.innerHTML =
-                "<td><code>" + (m.id || "").replace(/[&<>\"']/g, "") + "</code></td>" +
-                "<td>" + ago(m.activeAt) + "</td>" +
-                "<td></td>";
-            var delBtn = document.createElement("button");
-            delBtn.className = "small danger";
-            delBtn.textContent = "Del";
-            delBtn.onclick = (function(mid) { return function() { deleteMachine(mid); }; })(m.id);
-            tr.cells[2].appendChild(delBtn);
-            tbody.appendChild(tr);
-        });
-    }).catch(function(e) { console.error(e); });
-}
+// ---- tokens ----
 
 function generateToken() {
-    var label = $("token-label-input").value.trim() || null;
+    var label = $("tk-label").value.trim();
     var body = {};
     if (label) body.label = label;
-    $("gen-token-error").textContent = "";
+    $("tk-error").textContent = "";
     api("POST", "/v1/bootstrap-tokens", body).then(function(data) {
         var conn = SERVER + "/connect?token=" + data.token;
-        $("new-conn-str").textContent = conn;
-        $("new-token-area").classList.remove("hidden");
-        $("token-label-input").value = "";
-        // Save connection string so Copy button works after refresh
+        $("new-conn").textContent = conn;
+        $("new-tk-area").classList.remove("hidden");
+        $("tk-label").value = "";
         var saved = JSON.parse(localStorage.getItem("cch_tokens") || "{}");
         saved[data.record.id] = conn;
         localStorage.setItem("cch_tokens", JSON.stringify(saved));
         loadTokens();
-    }).catch(function(e) { $("gen-token-error").textContent = e.message; });
+    }).catch(function(e) { $("tk-error").textContent = e.message; });
 }
 
 function loadTokens() {
     api("GET", "/v1/bootstrap-tokens").then(function(data) {
-        var tbody = $("tokens-tbody");
-        tbody.innerHTML = "";
-        var active = (data.tokens || []).filter(function(t) { return t.revokedAt === null; });
-        if (active.length === 0) {
-            $("tokens-table").classList.add("hidden");
-            return;
-        }
-        $("tokens-table").classList.remove("hidden");
+        var div = $("tk-list");
+        var active = (data.tokens || []).filter(function(t) { return !t.revokedAt; });
+        if (active.length === 0) { div.innerHTML = ""; return; }
         var saved = JSON.parse(localStorage.getItem("cch_tokens") || "{}");
+        var html = "";
         active.forEach(function(t) {
-            var tr = document.createElement("tr");
-            tr.innerHTML =
-                "<td>" + (t.label || "—") + "</td>" +
-                "<td>" + fmt(t.createdAt) + "</td>" +
-                "<td><span class=\"badge badge-active\">Active</span></td>" +
-                "<td></td>";
-            var actions = tr.cells[3];
-            var revokeBtn = document.createElement("button");
-            revokeBtn.className = "small danger";
-            revokeBtn.textContent = "Revoke";
-            revokeBtn.onclick = (function(tid) { return function() { revokeToken(tid); }; })(t.id);
-            actions.appendChild(revokeBtn);
-            if (saved[t.id]) {
-                var copyBtn = document.createElement("button");
-                copyBtn.className = "small";
-                copyBtn.textContent = "Copy";
-                copyBtn.style.marginLeft = "4px";
-                copyBtn.onclick = (function(conn) { return function() {
-                    var btn = this;
-                    copyText(conn).then(function() {
-                        btn.textContent = "Copied!";
-                        setTimeout(function() { btn.textContent = "Copy"; }, 2000);
-                    });
-                }; })(saved[t.id]);
-                actions.appendChild(copyBtn);
-            }
-            tbody.appendChild(tr);
+            html += "<div style=\"font-size:11px;margin-top:4px\">" + esc(t.label||"—") + " " + fmt(t.createdAt);
+            if (saved[t.id]) html += " <button class=\"btn-sm\" onclick=\"copyText('" + saved[t.id].replace(/'/g,"\\'") + "')\">Copy</button>";
+            html += " <button class=\"btn-sm danger\" onclick=\"revokeToken('" + t.id + "')\">Revoke</button>";
+            html += "</div>";
         });
-    }).catch(function(e) { console.error(e); });
+        div.innerHTML = html;
+    }).catch(function(){});
 }
 
 function revokeToken(id) {
@@ -215,55 +242,27 @@ function revokeToken(id) {
     api("POST", "/v1/bootstrap-tokens/" + id + "/revoke").then(function() { loadTokens(); });
 }
 
-function deleteSession(id) {
-    if (!confirm("Delete this session? Local data is unaffected.")) return;
-    api("DELETE", "/v1/sessions/" + id).then(function() { loadSessions(); });
-}
-
-function deleteMachine(id) {
-    if (!confirm("Delete this machine? Local data is unaffected.")) return;
-    api("DELETE", "/v1/machines/" + id).then(function() { loadMachines(); });
-}
-
 function copyText(txt) {
-    // Fallback for HTTP origins where navigator.clipboard is unavailable
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-        return navigator.clipboard.writeText(txt);
-    }
+    if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(txt);
     var ta = document.createElement("textarea");
-    ta.value = txt;
-    ta.style.position = "fixed";
-    ta.style.left = "-9999px";
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand("copy");
-    document.body.removeChild(ta);
+    ta.value = txt; ta.style.position = "fixed"; ta.style.left = "-9999px";
+    document.body.appendChild(ta); ta.select(); document.execCommand("copy"); document.body.removeChild(ta);
     return Promise.resolve();
 }
 
-function copyToken() {
-    var txt = $("new-conn-str").textContent;
-    copyText(txt).then(function() {
-        var btn = $("copy-token-btn");
-        btn.textContent = "Copied!";
-        setTimeout(function() { btn.textContent = "Copy"; }, 2000);
-    });
-}
+// ---- events ----
 
 $("connect-btn").onclick = connect;
 $("connect-input").onkeydown = function(e) { if (e.key === "Enter") connect(); };
+$("theme-btn").onclick = toggleTheme;
 $("refresh-btn").onclick = refresh;
 $("logout-btn").onclick = logout;
-$("gen-token-btn").onclick = generateToken;
-$("token-label-input").onkeydown = function(e) { if (e.key === "Enter") generateToken(); };
-$("copy-token-btn").onclick = copyToken;
+$("gen-tk-btn").onclick = generateToken;
+$("tk-label").onkeydown = function(e) { if (e.key === "Enter") generateToken(); };
+$("copy-tk-btn").onclick = function() { copyText($("new-conn").textContent); };
+$("send-btn").onclick = sendMessage;
+$("msg-input").onkeydown = function(e) { if (e.key === "Enter") sendMessage(); };
 
 var urlToken = new URLSearchParams(window.location.search).get("token");
 if (urlToken) { $("connect-input").value = window.location.href; }
-if (TOKEN) {
-    $("connect-screen").classList.add("hidden");
-    $("dashboard-screen").classList.remove("hidden");
-    $("account-id-display").textContent = ACCOUNT_ID.slice(0, 12) + "...";
-    refresh();
-    refreshTimer = setInterval(refresh, 30000);
-}
+if (TOKEN) { showDashboard(); }

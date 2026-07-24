@@ -386,6 +386,43 @@ export function sessionRoutes(app: Fastify) {
         return reply.send({ success: true });
     });
 
+    // Plaintext messages — for ccd sessions (no E2E encryption)
+    app.get('/v1/sessions/:sessionId/plaintext-messages', {
+        preHandler: app.authenticate,
+        schema: { params: z.object({ sessionId: z.string() }) },
+    }, async (request, reply) => {
+        const messages = await db.plaintextMessage.findMany({
+            where: { sessionId: request.params.sessionId },
+            orderBy: { createdAt: 'asc' },
+            take: 200,
+        });
+        return reply.send({
+            messages: messages.map((m) => ({
+                id: m.id,
+                role: m.role,
+                content: m.content,
+                createdAt: m.createdAt.getTime(),
+            })),
+        });
+    });
+
+    app.post('/v1/sessions/:sessionId/plaintext-messages', {
+        preHandler: app.authenticate,
+        schema: {
+            params: z.object({ sessionId: z.string() }),
+            body: z.object({ role: z.string(), content: z.string() }),
+        },
+    }, async (request, reply) => {
+        const msg = await db.plaintextMessage.create({
+            data: {
+                sessionId: request.params.sessionId,
+                role: request.body.role,
+                content: request.body.content,
+            },
+        });
+        return reply.send({ id: msg.id });
+    });
+
     // Delete session
     app.delete('/v1/sessions/:sessionId', {
         schema: {

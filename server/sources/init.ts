@@ -24,7 +24,19 @@ async function init() {
         CREATE INDEX IF NOT EXISTS "BootstrapToken_accountId_idx" ON "BootstrapToken"("accountId");
     `);
 
-    console.log("BootstrapToken table ready.");
+    await pg.exec(`
+        CREATE TABLE IF NOT EXISTS "PlaintextMessage" (
+            "id" TEXT PRIMARY KEY,
+            "sessionId" TEXT NOT NULL,
+            "role" TEXT NOT NULL,
+            "content" TEXT NOT NULL,
+            "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+        CREATE INDEX IF NOT EXISTS "PlaintextMessage_sessionId_createdAt_idx"
+            ON "PlaintextMessage"("sessionId", "createdAt");
+    `);
+
+    console.log("Tables ready.");
     await pg.close();
 }
 
