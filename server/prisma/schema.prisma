@@ -396,3 +396,17 @@ model BootstrapToken {
 
     @@index([accountId])
 }
+
+//
+// Plaintext messages — for ccd-initiated sessions where client sends unencrypted
+//
+
+model PlaintextMessage {
+    id        String   @id @default(cuid())
+    sessionId String
+    role      String
+    content   String
+    createdAt DateTime @default(now())
+
+    @@index([sessionId, createdAt])
+}

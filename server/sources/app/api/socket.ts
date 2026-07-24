@@ -207,6 +207,15 @@ export function startSocket(app: Fastify) {
         // Handlers
         rpcHandler(userId, socket, io);
         usageHandler(userId, socket);
+
+        // ccd-message: daemon reports conversation messages for plaintext sessions
+        socket.on('ccd-message', (data: any) => {
+            const { sessionId, role, content } = data ?? {};
+            if (!sessionId || !role || !content) return;
+            db.plaintextMessage.create({
+                data: { sessionId, role, content: String(content) },
+            }).catch(err => log({ module: 'websocket', level: 'error' }, `ccd-message: ${err}`));
+        });
         sessionUpdateHandler(userId, socket, connection);
         pingHandler(socket);
         machineUpdateHandler(userId, socket);

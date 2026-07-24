@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -100,6 +100,20 @@ th{color:#8b949e;font-weight:600}
         <p style="color:#8b949e;font-size:12px;margin-top:8px">Tokens: <span id="selected-account-label">&mdash;</span></p>
     </div>
 </div>
+<button id="theme-btn" class="small" style="position:fixed;top:12px;right:12px;z-index:99">🌙</button>
 <script src="/admin.js"></script>
+<script>
+(function(){
+  var t = localStorage.getItem("admin_theme") || "light";
+  document.documentElement.setAttribute("data-theme", t);
+  document.getElementById("theme-btn").textContent = t === "dark" ? "☀" : "🌙";
+  document.getElementById("theme-btn").onclick = function() {
+    t = t === "light" ? "dark" : "light";
+    localStorage.setItem("admin_theme", t);
+    document.documentElement.setAttribute("data-theme", t);
+    this.textContent = t === "dark" ? "☀" : "🌙";
+  };
+})();
+</script>
 </body>
 </html>

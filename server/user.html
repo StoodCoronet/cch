@@ -1,107 +1,119 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>CCH</title>
 <style>
+:root {
+  --bg: #ffffff; --bg2: #f6f8fa; --bg3: #eaeef2;
+  --fg: #1f2328; --fg2: #656d76; --bd: #d0d7de;
+  --btn: #f6f8fa; --btn-hover: #eaeef2;
+  --green: #1a7f37; --red: #cf222e;
+  --term-bg: #0d1117; --term-fg: #7ee787;
+  --card: #ffffff;
+}
+[data-theme="dark"] {
+  --bg: #0d1117; --bg2: #161b22; --bg3: #21262d;
+  --fg: #e6edf3; --fg2: #8b949e; --bd: #30363d;
+  --btn: #21262d; --btn-hover: #30363d;
+  --green: #3fb950; --red: #f85149;
+  --card: #161b22;
+}
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:system-ui,sans-serif;background:#0f1117;color:#e1e4e8;max-width:720px;margin:0 auto;padding:32px 16px}
-h1{font-size:22px;margin-bottom:4px}
-h2{font-size:14px;color:#8b949e;text-transform:uppercase;letter-spacing:.5px;margin:24px 0 12px}
-input,button,select{font-size:14px;padding:10px 14px;border-radius:6px;border:1px solid #30363d;background:#161b22;color:#e1e4e8}
-button{cursor:pointer;background:#238636;border-color:#238636;font-weight:600}
-button:hover{background:#2ea043}
-button.sec{background:#30363d;border-color:#30363d}
-button.sec:hover{background:#484f58}
-button.danger{background:#da3633;border-color:#da3633}
-button.small{font-size:12px;padding:4px 10px}
-.card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:20px;margin-bottom:16px}
-.row{display:flex;gap:8px;margin-bottom:10px;align-items:center}
-.grow{flex:1}
-table{width:100%;border-collapse:collapse;font-size:13px}
-th,td{text-align:left;padding:8px 12px;border-bottom:1px solid #21262d}
-th{color:#8b949e;font-weight:600}
-.badge{display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600}
-.badge-active{background:#238636;color:#fff}
-.badge-off{background:#30363d;color:#8b949e}
-.hidden{display:none!important}
-.error{color:#f85149;font-size:13px;margin-top:4px}
-.success{color:#7ee787;font-size:13px;margin-top:4px}
-.sub{font-size:12px;color:#8b949e}
-.code{font-family:monospace;background:#0d1117;padding:2px 6px;border-radius:4px;font-size:12px;word-break:break-all}
-.token-box{font-family:monospace;font-size:13px;background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:12px;word-break:break-all;margin:8px 0}
-.conn-box{font-family:monospace;font-size:13px;background:#0d1117;border:1px solid #238636;border-radius:6px;padding:12px;word-break:break-all;color:#7ee787;margin:8px 0}
-#connect-screen{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:50vh}
-#connect-screen .card{width:100%;max-width:440px}
-.info-box{background:#161b22;border:1px solid #30363d;border-radius:6px;padding:12px;font-size:13px;color:#8b949e;margin-bottom:16px}
-.info-box code{color:#e1e4e8}
+body{font-family:system-ui,sans-serif;background:var(--bg);color:var(--fg);height:100vh;display:flex;flex-direction:column}
+.topbar{display:flex;align-items:center;padding:8px 16px;border-bottom:1px solid var(--bd);gap:8px;background:var(--bg2)}
+.topbar h1{font-size:16px;flex:1}
+.topbar button{font-size:12px;padding:4px 10px;border:1px solid var(--bd);border-radius:4px;background:var(--btn);color:var(--fg);cursor:pointer}
+.topbar button:hover{background:var(--btn-hover)}
+.main{display:flex;flex:1;overflow:hidden}
+.sidebar{width:280px;border-right:1px solid var(--bd);overflow-y:auto;padding:12px;background:var(--bg2)}
+.sidebar h2{font-size:12px;color:var(--fg2);text-transform:uppercase;margin:12px 0 6px}
+.sidebar .item{padding:8px;border-radius:4px;cursor:pointer;font-size:13px;border:1px solid transparent;margin-bottom:4px}
+.sidebar .item:hover{background:var(--bg3)}
+.sidebar .item.active{border-color:var(--green);background:var(--bg3)}
+.sidebar .item .sub{font-size:11px;color:var(--fg2)}
+.detail{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.detail-header{padding:12px 16px;border-bottom:1px solid var(--bd);font-size:13px}
+.detail-header code{font-family:monospace;font-size:12px}
+.term{flex:1;background:var(--term-bg);color:var(--term-fg);font-family:monospace;font-size:13px;padding:12px;overflow-y:auto;white-space:pre-wrap;display:none}
+.term.active{display:block}
+.term-msg{margin-bottom:4px}
+.term-msg.role-user{color:#58a6ff}
+.term-input{display:flex;border-top:1px solid var(--bd);padding:8px;background:var(--term-bg);display:none}
+.term-input.active{display:flex}
+.term-input input{flex:1;background:transparent;border:none;color:var(--term-fg);font-family:monospace;font-size:13px;outline:none}
+.term-input input::placeholder{color:var(--fg2)}
+.term-input button{background:var(--green);color:#fff;border:none;padding:4px 12px;border-radius:4px;font-size:12px;cursor:pointer}
+.placeholder{flex:1;display:flex;align-items:center;justify-content:center;color:var(--fg2);font-size:14px}
+.empty{text-align:center;padding:24px;color:var(--fg2);font-size:13px}
+.badge{display:inline-block;padding:1px 6px;border-radius:8px;font-size:10px;font-weight:600}
+.badge-active{background:var(--green);color:#fff}
+.badge-idle{background:var(--fg2);color:var(--bg)}
+.btn-sm{font-size:11px;padding:2px 6px;border:1px solid var(--bd);border-radius:3px;background:var(--btn);color:var(--fg);cursor:pointer}
+.btn-sm:hover{background:var(--btn-hover)}
+.btn-sm.danger{color:var(--red);border-color:var(--red)}
+.token-area{margin-top:8px;padding:8px;border-top:1px solid var(--bd);font-size:12px}
+.token-area input{width:100%;font-size:12px;padding:4px 8px;border:1px solid var(--bd);border-radius:4px;background:var(--bg);color:var(--fg)}
+.token-area button{margin-top:4px;font-size:11px;padding:3px 8px}
+.conn-str{font-family:monospace;font-size:11px;background:var(--bg3);padding:4px 8px;border-radius:4px;word-break:break-all;margin:4px 0}
+#connect-screen{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh}
+#connect-screen .card{background:var(--card);border:1px solid var(--bd);border-radius:8px;padding:24px;width:100%;max-width:400px}
+#connect-screen input{width:100%;font-size:14px;padding:10px;border:1px solid var(--bd);border-radius:6px;margin-bottom:8px;background:var(--bg);color:var(--fg)}
+#connect-screen button{width:100%;font-size:14px;padding:10px;background:var(--green);color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600}
+.error{color:var(--red);font-size:12px;margin-top:4px}
+@media(max-width:768px){.main{flex-direction:column}.sidebar{width:100%;max-height:40vh}}
 </style>
 </head>
 <body>
-
 <div id="connect-screen">
-    <div class="card">
-        <h1>CCH</h1>
-        <p class="sub" style="margin-bottom:16px">Connect to your server to monitor sessions</p>
-        <div class="row">
-            <input id="connect-input" type="text" placeholder="Paste connection string or token..." class="grow" autofocus>
-        </div>
-        <button id="connect-btn" style="width:100%">Connect</button>
-        <p class="error" id="connect-error"></p>
-    </div>
+  <div class="card">
+    <h1>CCH</h1>
+    <p style="color:var(--fg2);margin-bottom:12px">Connect to your server</p>
+    <input id="connect-input" type="text" placeholder="Paste connection string or token...">
+    <button id="connect-btn">Connect</button>
+    <p class="error" id="connect-error"></p>
+  </div>
 </div>
 
-<div id="dashboard-screen" class="hidden">
-    <div class="row">
-        <h1 class="grow">CCH</h1>
-        <div>
-            <button id="refresh-btn" class="sec small">Refresh</button>
-            <button id="logout-btn" class="sec small" style="margin-left:4px">Logout</button>
+<div id="main-screen" class="hidden" style="display:none;flex-direction:column;height:100vh">
+  <div class="topbar">
+    <h1>CCH</h1>
+    <span style="font-size:12px;color:var(--fg2)" id="acct-display"></span>
+    <button id="theme-btn">🌙</button>
+    <button id="refresh-btn">Refresh</button>
+    <button id="logout-btn">Logout</button>
+  </div>
+  <div class="main">
+    <div class="sidebar" id="sidebar">
+      <h2>Sessions (<span id="scount">0</span>)</h2>
+      <div id="slist"></div>
+      <h2>Machines (<span id="mcount">0</span>)</h2>
+      <div id="mlist"></div>
+      <div class="token-area">
+        <h2>Connect a Device</h2>
+        <input id="tk-label" type="text" placeholder="Label, e.g. macbook-pro">
+        <button id="gen-tk-btn">Generate Token</button>
+        <p class="error" id="tk-error"></p>
+        <div id="new-tk-area" class="hidden">
+          <div class="conn-str" id="new-conn"></div>
+          <button class="btn-sm" id="copy-tk-btn">Copy</button>
         </div>
+        <div id="tk-list" style="margin-top:8px"></div>
+      </div>
     </div>
-    <p class="sub">Account <code id="account-id-display"></code></p>
-
-    <h2>Sessions <span class="sub" id="session-count">(0)</span></h2>
-    <div class="card">
-        <div id="sessions-empty" class="sub" style="text-align:center;padding:24px">No active sessions yet.<br>Run <code>cch run</code> on your machine to start one.</div>
-        <table id="sessions-table" class="hidden">
-            <thead><tr><th>Session</th><th>Machine</th><th>Status</th><th>Last Active</th><th>Created</th><th></th></tr></thead>
-            <tbody id="sessions-tbody"></tbody>
-        </table>
+    <div class="detail" id="detail">
+      <div class="placeholder" id="no-selection">Select a session from the list</div>
+      <div class="detail-header hidden" id="detail-head"></div>
+      <div class="term" id="term"></div>
+      <div class="term-input" id="term-input">
+        <span style="color:var(--green);margin-right:4px">></span>
+        <input id="msg-input" type="text" placeholder="Type a message...">
+        <button id="send-btn">Send</button>
+      </div>
     </div>
-
-    <h2>Machines <span class="sub" id="machine-count">(0)</span></h2>
-    <div class="card">
-        <div id="machines-empty" class="sub" style="text-align:center;padding:24px">No machines yet. Run cch on your machine to register.</div>
-        <table id="machines-table" class="hidden">
-            <thead><tr><th>Machine</th><th>Last Seen</th><th></th></tr></thead>
-            <tbody id="machines-tbody"></tbody>
-        </table>
-    </div>
-
-    <h2>Connect a Device</h2>
-    <div class="card">
-        <div class="row">
-            <input id="token-label-input" type="text" placeholder="Label, e.g. macbook-pro" class="grow">
-            <button id="gen-token-btn">Generate Token</button>
-        </div>
-        <p class="error" id="gen-token-error"></p>
-        <div id="new-token-area" class="hidden" style="margin-top:12px">
-            <p class="success">Token generated. Copy the connection string:</p>
-            <div class="conn-box" id="new-conn-str"></div>
-            <button id="copy-token-btn" class="small" style="margin-top:8px">Copy</button>
-            <p class="sub" style="margin-top:4px">Run on the target machine: <code>cch happy --connect "&lt;paste&gt;"</code></p>
-        </div>
-        <div id="tokens-table-area" style="margin-top:16px">
-            <table id="tokens-table" class="hidden">
-                <thead><tr><th>Label</th><th>Created</th><th>Status</th><th></th></tr></thead>
-                <tbody id="tokens-tbody"></tbody>
-            </table>
-        </div>
-    </div>
+  </div>
 </div>
-
 <script src="/user.js"></script>
 </body>
 </html>
