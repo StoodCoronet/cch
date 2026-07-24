@@ -8,12 +8,7 @@ import {
     listBootstrapTokens,
     revokeBootstrapToken,
 } from "@/app/auth/bootstrapToken";
-import { kvMutate } from "@/app/kv/kvMutate";
-import {
-    PASSWORD_KV_KEY,
-    hashPassword,
-    encodePasswordRecord,
-} from "@/app/auth/password";
+import { hashPassword, serializePasswordRecord } from "@/app/auth/password";
 
 function adminAuth(request: any, reply: any): boolean {
     const password = process.env.ADMIN_PASSWORD;
@@ -80,23 +75,86 @@ export function adminRoutes(app: Fastify) {
             data: {
                 publicKey: publicKeyHex,
                 username: request.body.username,
+                passwordHash: request.body.password
+                    ? serializePasswordRecord(await hashPassword(request.body.password))
+                    : undefined,
             },
         });
-
-        if (request.body.password) {
-            const hashed = await hashPassword(request.body.password);
-            await kvMutate({ uid: account.id }, [{
-                key: PASSWORD_KV_KEY,
-                value: encodePasswordRecord(hashed),
-                version: -1,
-            }]);
-        }
 
         return reply.send({
             accountId: account.id,
             username: account.username,
             createdAt: account.createdAt,
         });
+    });
+
+    // Delete an account and all associated data (cascade)
+    app.delete('/v1/admin/accounts/:id', {
+        schema: { params: z.object({ id: z.string() }) },
+    }, async (request, reply) => {
+        if (!adminAuth(request, reply)) return;
+
+        const accountId = request.params.id;
+        const account = await db.account.findUnique({ where: { id: accountId } });
+        if (!account) {
+            return reply.code(404).send({ error: 'Account not found' });
+        }
+
+        try {
+            // Gather related IDs for deep cleanup.
+            const sessions = await db.session.findMany({
+                where: { accountId },
+                select: { id: true },
+            });
+            const sessionIds = sessions.map((s) => s.id);
+
+            const machines = await db.machine.findMany({
+                where: { accountId },
+                select: { id: true },
+            });
+            const machineIds = machines.map((m) => m.id);
+
+            await db.$transaction([
+                // Social / feed / kv / tokens.
+                db.userRelationship.deleteMany({
+                    where: { OR: [{ fromUserId: accountId }, { toUserId: accountId }] },
+                }),
+                db.userFeedItem.deleteMany({ where: { userId: accountId } }),
+                db.userKVStore.deleteMany({ where: { accountId } }),
+                db.accountPushToken.deleteMany({ where: { accountId } }),
+                db.terminalAuthRequest.deleteMany({ where: { responseAccountId: accountId } }),
+                db.accountAuthRequest.deleteMany({ where: { responseAccountId: accountId } }),
+                db.serviceAccountToken.deleteMany({ where: { accountId } }),
+                db.voiceConversation.deleteMany({ where: { accountId } }),
+                db.bootstrapToken.deleteMany({ where: { accountId } }),
+
+                // Files and artifacts.
+                db.uploadedFile.deleteMany({ where: { accountId } }),
+                db.artifact.deleteMany({ where: { accountId } }),
+
+                // Session-related data.
+                db.plaintextMessage.deleteMany({ where: { sessionId: { in: sessionIds } } }),
+                db.sessionMessage.deleteMany({ where: { sessionId: { in: sessionIds } } }),
+                db.usageReport.deleteMany({ where: { sessionId: { in: sessionIds } } }),
+                db.accessKey.deleteMany({
+                    where: {
+                        OR: [
+                            { sessionId: { in: sessionIds } },
+                            { machineId: { in: machineIds } },
+                        ],
+                    },
+                }),
+                db.session.deleteMany({ where: { accountId } }),
+                db.machine.deleteMany({ where: { accountId } }),
+
+                // Finally the account itself.
+                db.account.delete({ where: { id: accountId } }),
+            ]);
+
+            return reply.send({ success: true });
+        } catch (e: any) {
+            return reply.code(500).send({ error: e.message || 'Failed to delete account' });
+        }
     });
 
     // List accounts with session counts

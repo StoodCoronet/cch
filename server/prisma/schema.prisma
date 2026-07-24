@@ -35,6 +35,7 @@ model Account {
     firstName String?
     lastName  String?
     username  String? @unique
+    passwordHash String? // scrypt password record (JSON: {hash, salt})
     /// [ImageRef]
     avatar    Json?
 

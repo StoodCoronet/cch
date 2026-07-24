@@ -7,9 +7,7 @@ import { randomKeyNaked } from "@/utils/randomKeyNaked";
 import { allocateUserSeq } from "@/storage/seq";
 import { log } from "@/utils/log";
 import { AccountProfile } from "@/types";
-import { kvGet } from "@/app/kv/kvGet";
-import { kvMutate } from "@/app/kv/kvMutate";
-import { PASSWORD_KV_KEY, hashPassword, encodePasswordRecord } from "@/app/auth/password";
+import { hashPassword, serializePasswordRecord } from "@/app/auth/password";
 
 export function accountRoutes(app: Fastify) {
     app.get('/v1/account/profile', {
@@ -189,13 +187,10 @@ export function accountRoutes(app: Fastify) {
         preHandler: app.authenticate,
     }, async (request, reply) => {
         const userId = request.userId;
-        const hashed = await hashPassword(request.body.password);
-        const existing = await kvGet({ uid: userId }, PASSWORD_KV_KEY);
-        await kvMutate({ uid: userId }, [{
-            key: PASSWORD_KV_KEY,
-            value: encodePasswordRecord(hashed),
-            version: existing ? existing.version : -1,
-        }]);
+        await db.account.update({
+            where: { id: userId },
+            data: { passwordHash: serializePasswordRecord(await hashPassword(request.body.password)) },
+        });
         return reply.send({ success: true });
     });
 

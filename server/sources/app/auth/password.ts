@@ -2,9 +2,7 @@ import { scrypt, randomBytes, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 
 const scryptAsync = promisify(scrypt);
-const PASSWORD_KV_KEY = "auth.password";
-
-export { PASSWORD_KV_KEY };
+export const PASSWORD_KV_KEY = "auth.password";
 
 export interface PasswordRecord {
     hash: string;
@@ -24,10 +22,12 @@ export async function verifyPassword(password: string, record: PasswordRecord): 
     return timingSafeEqual(derived, stored);
 }
 
-export function encodePasswordRecord(record: PasswordRecord): string {
-    return Buffer.from(JSON.stringify(record), "utf-8").toString("base64");
+/** Serialize a password record to a JSON string for storage in a String column. */
+export function serializePasswordRecord(record: PasswordRecord): string {
+    return JSON.stringify(record);
 }
 
-export function decodePasswordRecord(value: string): PasswordRecord {
-    return JSON.parse(Buffer.from(value, "base64").toString("utf-8")) as PasswordRecord;
+/** Deserialize a password record from a JSON string. */
+export function deserializePasswordRecord(value: string): PasswordRecord {
+    return JSON.parse(value) as PasswordRecord;
 }

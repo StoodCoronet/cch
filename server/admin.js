@@ -54,7 +54,8 @@ function loadAccounts() {
                 '<td>' +
                     '<div class="meter"><div class="meter-fill" style="width:' + pct + '%"></div></div>' +
                 '</td>' +
-                "<td>" + fmt(a.createdAt) + "</td>";
+                "<td>" + fmt(a.createdAt) + "</td>" +
+                '<td><button class="delete-btn" onclick="deleteAccount(\'' + a.id.replace(/'/g, "\\'") + '\')">Delete</button></td>';
             tbody.appendChild(row);
         });
     }).catch(function(e) { console.error(e); });
@@ -84,6 +85,14 @@ function createAccount() {
         loadAccounts();
         loadStats();
     }).catch(function(e) { setError("account-error", e.message); });
+}
+
+function deleteAccount(id) {
+    if (!confirm("Delete this account and all its data?")) return;
+    api("DELETE", "/v1/admin/accounts/" + id).then(function() {
+        loadAccounts();
+        loadStats();
+    }).catch(function(e) { alert(e.message); });
 }
 
 function loadStats() {

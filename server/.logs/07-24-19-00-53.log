@@ -1,0 +1,3 @@
+{"level":30,"time":1784890854143,"localTime":"19:00:54.143","pid":91729,"hostname":"RobyedeMacBook-Pro.local","module":"auth","localTime":"19:00:54.143","msg":"Initializing auth module..."}
+{"level":30,"time":1784890854242,"localTime":"19:00:54.242","pid":91729,"hostname":"RobyedeMacBook-Pro.local","module":"auth","localTime":"19:00:54.242","msg":"Auth module initialized"}
+{"level":30,"time":1784890854242,"localTime":"19:00:54.242","pid":91729,"hostname":"RobyedeMacBook-Pro.local","localTime":"19:00:54.242","msg":"Starting API..."}

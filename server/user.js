@@ -1,7 +1,7 @@
 var TOKEN = localStorage.getItem("cch_token") || "";
 var ACCOUNT_ID = localStorage.getItem("cch_account_id") || "";
 var SERVER = localStorage.getItem("cch_server") || window.location.origin;
-var THEME = localStorage.getItem("cch_theme") || "dark";
+var THEME = localStorage.getItem("cch_theme") || "light";
 var currentSessionId = null;
 var currentSession = null;
 var allSessions = [];

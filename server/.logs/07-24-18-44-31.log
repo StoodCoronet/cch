@@ -1,0 +1,8 @@
+{"level":30,"time":1784889872115,"localTime":"18:44:32.115","pid":77937,"hostname":"RobyedeMacBook-Pro.local","module":"auth","localTime":"18:44:32.115","msg":"Initializing auth module..."}
+{"level":30,"time":1784889872212,"localTime":"18:44:32.212","pid":77937,"hostname":"RobyedeMacBook-Pro.local","module":"auth","localTime":"18:44:32.212","msg":"Auth module initialized"}
+{"level":30,"time":1784889872213,"localTime":"18:44:32.213","pid":77937,"hostname":"RobyedeMacBook-Pro.local","localTime":"18:44:32.213","msg":"Starting API..."}
+{"level":30,"time":1784889872285,"localTime":"18:44:32.285","pid":77937,"hostname":"RobyedeMacBook-Pro.local","localTime":"18:44:32.285","msg":"Server listening at http://127.0.0.1:3005"}
+{"level":30,"time":1784889872285,"localTime":"18:44:32.285","pid":77937,"hostname":"RobyedeMacBook-Pro.local","localTime":"18:44:32.285","msg":"Server listening at http://192.168.1.105:3005"}
+{"level":30,"time":1784889872286,"localTime":"18:44:32.286","pid":77937,"hostname":"RobyedeMacBook-Pro.local","localTime":"18:44:32.286","msg":"API ready on http://0.0.0.0:3005"}
+{"level":30,"time":1784889878044,"localTime":"18:44:38.044","pid":77937,"hostname":"RobyedeMacBook-Pro.local","reqId":"req-1","req":{"method":"POST","url":"/v1/admin/accounts","host":"localhost:3005","remoteAddress":"127.0.0.1","remotePort":62977},"localTime":"18:44:38.045","msg":"incoming request"}
+{"level":30,"time":1784889878056,"localTime":"18:44:38.056","pid":77937,"hostname":"RobyedeMacBook-Pro.local","reqId":"req-1","res":{"statusCode":409},"responseTime":10.574874997138977,"localTime":"18:44:38.056","msg":"request completed"}
