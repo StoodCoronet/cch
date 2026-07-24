@@ -163,7 +163,8 @@ fn sync_session_messages_blocking(server: &str, auth: &str) {
                 .and_then(|m| m.modified().ok())
                 .unwrap_or(std::time::UNIX_EPOCH));
             jsonls.reverse();
-            let jsonl = match jsonls.first() { Some(j) => j.path(), None => continue };
+            let jsonl = match jsonls.first() { Some(j) => j.path(), None => { eprintln!("ccd: no JSONL for {session_id}"); continue } };
+            eprintln!("ccd: found JSONL for {session_id}: {:?}", jsonl);
 
             // Read from last offset and sync new messages
             let offset: u64 = std::fs::read_to_string(&offset_path).ok()
@@ -171,8 +172,10 @@ fn sync_session_messages_blocking(server: &str, auth: &str) {
             if let Ok(meta) = jsonl.metadata() {
                 let size = meta.len();
                 if size > offset {
+                    eprintln!("ccd: syncing {session_id} offset={offset} size={size}");
                     if let Ok(content) = std::fs::read(&jsonl) {
                         let new_data = &content[offset as usize..];
+                        let mut count = 0u32;
                         for line in new_data.split(|&b| b == b'\n') {
                             if line.is_empty() { continue; }
                             if let Ok(msg) = serde_json::from_slice::<serde_json::Value>(line) {
@@ -189,9 +192,11 @@ fn sync_session_messages_blocking(server: &str, auth: &str) {
                                         .header("Authorization", format!("Bearer {auth}"))
                                         .json(&serde_json::json!({ "role": role, "content": text }))
                                         .send();
+                                    count += 1;
                                 }
                             }
                         }
+                        if count > 0 { eprintln!("ccd: synced {count} messages for {session_id}"); }
                         let _ = std::fs::write(&offset_path, size.to_string());
                     }
                 }
