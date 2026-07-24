@@ -101,7 +101,7 @@ async fn run_daemon() -> Result<()> {
     println!("ccd: daemon ready — {} online", machine);
 
     let mut heartbeat_tick = time::interval(Duration::from_secs(30));
-    let mut monitor_tick = time::interval(Duration::from_secs(10));
+    let mut monitor_tick = time::interval(Duration::from_secs(3));
 
     loop {
         tokio::select! {
