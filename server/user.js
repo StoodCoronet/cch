@@ -170,6 +170,7 @@ function loadMachines() {
 function selectSession(s) {
     currentSessionId = s.id;
     currentSession = s;
+    if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = setInterval(refresh, 2000); }
     renderSessions(allSessions);
     $("placeholder").classList.add("hidden");
     $("messages").classList.remove("hidden");
@@ -338,7 +339,7 @@ function connect() {
 function showDashboard() {
     $("connect-screen").style.display = "none";
     loadSessions(); loadMachines(); loadTokens();
-    refreshTimer = setInterval(refresh, 30000);
+    refreshTimer = setInterval(refresh, currentSessionId ? 2000 : 30000);
 }
 
 function logout() {

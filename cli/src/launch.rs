@@ -201,7 +201,8 @@ fn report_machine(server: &str, auth_token: &str, hostname: &str) -> Result<()> 
 
 fn report_session(server: &str, auth_token: &str, cwd: &str, hostname: &str) -> Result<String> {
     let client = client();
-    let tag = cwd.replace('/', "-").trim_start_matches('-').to_string();
+    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let tag = format!("{}-{}", cwd.replace('/', "-").trim_start_matches('-'), ts);
     let resp = client
         .post(format!("{server}/v1/sessions"))
         .header("Authorization", format!("Bearer {auth_token}"))

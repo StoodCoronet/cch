@@ -56,7 +56,7 @@ async fn run_daemon() -> Result<()> {
     let auth = auth_token.clone();
     let mach = machine.clone();
     let mut heartbeat_tick = time::interval(Duration::from_secs(30));
-    let mut sync_tick = time::interval(Duration::from_millis(1000));
+    let mut sync_tick = time::interval(Duration::from_millis(500));
 
     loop {
         tokio::select! {
@@ -83,17 +83,23 @@ fn sync_jsonl(server: &str, auth: &str) {
     let claude_dir = dirs::home_dir().unwrap_or_default().join(".claude").join("projects");
     let client = reqwest::blocking::Client::builder().no_proxy().build().unwrap();
 
-    for entry in std::fs::read_dir(&track_dir).into_iter().flatten().flatten() {
-        let path = entry.path();
-        if path.extension().map_or(true, |e| e != "json") { continue; }
-        let offset_path = path.with_extension("offset");
-        let track: serde_json::Value = match fs::read_to_string(&path).ok().and_then(|s| serde_json::from_str(&s).ok()) {
-            Some(v) => v, None => continue
-        };
-        let session_id = track["sessionId"].as_str().unwrap_or("");
-        let cwd = track["cwd"].as_str().unwrap_or("");
-        if session_id.is_empty() || cwd.is_empty() { continue; }
+    // Sync only the most recently created tracking file to avoid cross-contamination
+    let latest_track = std::fs::read_dir(&track_dir).into_iter().flatten()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().map_or(false, |e| e == "json"))
+        .max_by_key(|e| e.metadata().ok().and_then(|m| m.created().ok()).unwrap_or(std::time::UNIX_EPOCH));
 
+    let entry = match latest_track { Some(e) => e, None => return };
+    let path = entry.path();
+    let offset_path = path.with_extension("offset");
+    let track: serde_json::Value = match fs::read_to_string(&path).ok().and_then(|s| serde_json::from_str(&s).ok()) {
+        Some(v) => v, None => return
+    };
+    let session_id = track["sessionId"].as_str().unwrap_or("");
+    let cwd = track["cwd"].as_str().unwrap_or("");
+    if session_id.is_empty() || cwd.is_empty() { return; }
+
+    {
         let proj_name = cwd.replace('/', "-").replace('_', "-");
         let proj_path = claude_dir.join(&proj_name);
         let mut jsonls: Vec<_> = match std::fs::read_dir(&proj_path) {
@@ -101,13 +107,16 @@ fn sync_jsonl(server: &str, auth: &str) {
                 .filter_map(|e| e.ok())
                 .filter(|e| e.path().extension().map_or(false, |e| e == "jsonl"))
                 .collect(),
-            Err(e) => { eprintln!("ccd: read_dir error: {e}"); continue }
+            Err(e) => { eprintln!("ccd: read_dir error: {e}"); return }
         };
+        // Only JSONLs created/modified after this session started
+        let track_created = entry.metadata().ok().and_then(|m| m.created().ok()).unwrap_or(std::time::UNIX_EPOCH);
+        jsonls.retain(|e| std::fs::metadata(e.path()).ok().and_then(|m| m.modified().ok()).unwrap_or(std::time::UNIX_EPOCH) >= track_created);
         jsonls.sort_by_key(|e| std::fs::metadata(e.path()).ok().and_then(|m| m.modified().ok()).unwrap_or(std::time::UNIX_EPOCH));
         jsonls.reverse();
         let jsonl = match jsonls.first() {
             Some(j) => j.path(),
-            None => { eprintln!("ccd: no JSONL in {:?}", claude_dir.join(&proj_name)); continue }
+            None => { eprintln!("ccd: no JSONL in {:?}", claude_dir.join(&proj_name)); return }
         };
         eprintln!("ccd: syncing {}", jsonl.display());
 
@@ -120,9 +129,11 @@ fn sync_jsonl(server: &str, auth: &str) {
                         if line.is_empty() { continue; }
                         if let Ok(msg) = serde_json::from_slice::<serde_json::Value>(line) {
                             let role = msg["type"].as_str().unwrap_or("");
-                            let text = msg["message"]["content"].as_array()
-                                .map(|p| p.iter().filter_map(|x| x["text"].as_str()).collect::<Vec<_>>().join(""))
-                                .unwrap_or_default();
+                            let text = if let Some(arr) = msg["message"]["content"].as_array() {
+                                arr.iter().filter_map(|x| x["text"].as_str()).collect::<Vec<_>>().join("")
+                            } else {
+                                msg["message"]["content"].as_str().unwrap_or("").to_string()
+                            };
                             if !text.is_empty() && (role == "user" || role == "assistant") {
                                 let _ = client
                                     .post(format!("{server}/v1/sessions/{session_id}/plaintext-messages"))
@@ -131,12 +142,24 @@ fn sync_jsonl(server: &str, auth: &str) {
                             }
                         }
                     }
+                    // Update session activity timestamp
+                    let _ = client
+                        .post(format!("{server}/v1/sessions/{session_id}/activity"))
+                        .header("Authorization", format!("Bearer {auth}"))
+                        .timeout(Duration::from_secs(3)).send();
                     let _ = fs::write(&offset_path, size.to_string());
                 }
             }
-        }
-        if Command::new("pgrep").arg("-f").arg(cwd).output().map(|o| !o.status.success()).unwrap_or(true) {
-            let _ = fs::remove_file(&path); let _ = fs::remove_file(&offset_path);
+            // Only auto-clean if the JSONL hasn't been modified recently (claude exited)
+            if let Ok(meta) = jsonl.metadata() {
+                if let Ok(m) = meta.modified() {
+                    let age = std::time::SystemTime::now().duration_since(m).unwrap_or_default();
+                    if age.as_secs() > 300 { // 5 min since last write = session ended
+                        let _ = fs::remove_file(&path);
+                        let _ = fs::remove_file(&offset_path);
+                    }
+                }
+            }
         }
     }
 }

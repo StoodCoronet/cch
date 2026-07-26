@@ -437,6 +437,18 @@ export function sessionRoutes(app: Fastify) {
         return reply.send({ id: msg.id });
     });
 
+    // Activity ping — daemon calls this while session is active
+    app.post('/v1/sessions/:sessionId/activity', {
+        preHandler: app.authenticate,
+        schema: { params: z.object({ sessionId: z.string() }) },
+    }, async (request, reply) => {
+        await db.session.update({
+            where: { id: request.params.sessionId },
+            data: { lastActiveAt: new Date(), active: true },
+        }).catch(() => {}); // session may not exist yet — ignore
+        return reply.send({ ok: true });
+    });
+
     // Delete session
     app.delete('/v1/sessions/:sessionId', {
         schema: {
