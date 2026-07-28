@@ -128,7 +128,7 @@ function loadSessions() {
 function renderSessions(sessions) {
     var q = $("session-search").value.trim().toLowerCase();
     var filtered = sessions.filter(function(s) {
-        var t = (s.metadata || s.id).toLowerCase();
+        var t = (s.tag || s.id).toLowerCase();
         return t.indexOf(q) !== -1;
     });
     var div = $("slist");
@@ -136,7 +136,7 @@ function renderSessions(sessions) {
     filtered.forEach(function(s) {
         var el = document.createElement("div");
         el.className = "session-item" + (s.id === currentSessionId ? " selected" : "");
-        var title = (s.metadata || s.id.slice(0, 10)).replace(/[&<>]/g, "");
+        var title = (s.tag || s.id.slice(0, 10)).replace(/[&<>]/g, "");
         el.innerHTML =
             '<div class="title">' +
                 '<span class="dot ' + (s.active ? "active" : "idle") + '"></span>' +
@@ -174,11 +174,21 @@ function selectSession(s) {
     renderSessions(allSessions);
     $("placeholder").classList.add("hidden");
     $("messages").classList.remove("hidden");
-    $("input-area").classList.toggle("hidden", !s.isPlaintext);
-    $("chat-title").textContent = esc(s.metadata || s.id.slice(0, 12));
-    $("chat-meta").textContent = "Created " + fmt(s.createdAt) + (s.machineName ? " · " + esc(s.machineName) : "");
+    updateInputVisibility(s);
+    $("chat-title").textContent = esc(s.tag || s.id.slice(0, 12));
+    $("chat-meta").textContent = "Created " + fmt(s.createdAt) + (s.machineName && s.machineName !== s.tag ? " · " + esc(s.machineName) : "");
     $("messages-inner").innerHTML = '<div class="empty">Loading messages...</div>';
     loadMessages();
+}
+
+function updateInputVisibility(s) {
+    if (!s) {
+        $("input-area").classList.add("hidden");
+        return;
+    }
+    // Show input when the session already has plaintext messages, or when it is a ccd-tracked session
+    var show = s.isPlaintext || (s.msgCount && s.msgCount > 0);
+    $("input-area").classList.toggle("hidden", !show);
 }
 
 function loadMessages() {
@@ -191,7 +201,7 @@ function loadMessages() {
             return;
         }
         container.innerHTML = "";
-        messages.forEach(function(m) { appendMessageToDOM(m.role, m.content, false); });
+        messages.forEach(function(m) { appendMessageToDOM(m.role, m.content, false, m.createdAt, m.metadata); });
         scrollToBottom();
     }).catch(function(e) {
         $("messages-inner").innerHTML = '<div class="empty">Cannot load messages.</div>';
@@ -205,35 +215,99 @@ function scrollToBottom() {
 }
 
 function formatContent(text) {
+    var codeBlocks = [];
     var html = esc(text);
-    // Code blocks
+
+    // Extract code blocks first so paragraph splitting doesn't break them
     html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, function(_, lang, code) {
-        return '<pre><button class="copy-code">Copy</button><code>' + esc(code.trim()) + '</code></pre>';
+        var placeholder = "\x00CODEBLOCK_" + codeBlocks.length + "\x00";
+        var label = lang ? lang : "code";
+        var top = "╭─ " + label;
+        var bottom = "╰─";
+        codeBlocks.push(
+            '<div class="code-block">' +
+                '<div class="code-block-border">' + esc(top) + '</div>' +
+                '<pre><button class="copy-code">Copy</button><code>' + esc(code.trim()) + '</code></pre>' +
+                '<div class="code-block-border">' + esc(bottom) + '</div>' +
+            '</div>'
+        );
+        return placeholder;
     });
+
     // Inline code
     html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+
     // Paragraphs
     var parts = html.split(/\n\n+/);
-    return parts.map(function(p) {
-        if (p.indexOf("<pre") === 0 || p.indexOf("<div") === 0) return p;
+    html = parts.map(function(p) {
+        if (p.indexOf("\x00CODEBLOCK_") !== -1) return p;
         return '<p>' + p.replace(/\n/g, "<br>") + '</p>';
     }).join("");
+
+    // Restore code blocks
+    html = html.replace(/\x00CODEBLOCK_(\d+)\x00/g, function(_, i) {
+        return codeBlocks[parseInt(i, 10)];
+    });
+
+    return html;
 }
 
-function appendMessageToDOM(role, content, autoScroll) {
+function appendMessageToDOM(role, content, autoScroll, createdAt, metadata) {
     var container = $("messages-inner");
     var empty = container.querySelector(".empty");
     if (empty) empty.remove();
+
+    // Divider between messages (not before the first one)
+    if (container.querySelector(".message")) {
+        var divider = document.createElement("hr");
+        divider.className = "message-divider";
+        container.appendChild(divider);
+    }
+
+    // Thinking block (assistant only)
+    if (metadata && role === "assistant" && (metadata.thinking || metadata.thinkingMs)) {
+        container.appendChild(renderThinkingBlock(metadata));
+    }
+
     var msg = document.createElement("div");
     msg.className = "message " + role;
-    var avatar = role === "user" ? "Y" : "AI";
+    var prompt = role === "user" ? "❯" : "⏺";
     msg.innerHTML =
-        '<div class="avatar">' + avatar + '</div>' +
-        '<div class="content">' +
-            '<div class="role">' + esc(role || "unknown") + '</div>' +
-            '<div class="bubble">' + formatContent(content) + '</div>' +
-        '</div>';
+        '<div class="message-prompt">' + prompt + '</div>' +
+        '<div class="message-content">' + formatContent(content) + '</div>';
     container.appendChild(msg);
+
+    // Tool calls
+    if (metadata && metadata.toolCalls && metadata.toolCalls.length) {
+        metadata.toolCalls.forEach(function(tc) {
+            container.appendChild(renderToolCall(tc));
+        });
+    }
+
+    // Turn status (assistant only)
+    if (metadata && role === "assistant") {
+        var parts = [];
+        if (metadata.bakedMs) parts.push("Baked for " + formatDuration(metadata.bakedMs));
+        if (metadata.tokens) {
+            var t = metadata.tokens;
+            if (t.input || t.output) parts.push((t.input || 0) + "↑ " + (t.output || 0) + "↓");
+            if (t.cost) parts.push("$" + t.cost.toFixed(4));
+        }
+        if (parts.length) {
+            var meta = document.createElement("div");
+            meta.className = "message-meta";
+            meta.textContent = "✻ " + parts.join(" · ");
+            container.appendChild(meta);
+        }
+    }
+
+    if (createdAt) {
+        var time = document.createElement("div");
+        time.className = "message-time";
+        time.textContent = fmt(createdAt);
+        container.appendChild(time);
+    }
+
     msg.querySelectorAll(".copy-code").forEach(function(btn) {
         btn.onclick = function() {
             var code = this.nextElementSibling.textContent;
@@ -246,6 +320,75 @@ function appendMessageToDOM(role, content, autoScroll) {
     if (autoScroll) scrollToBottom();
 }
 
+function renderThinkingBlock(metadata) {
+    var wrap = document.createElement("div");
+    wrap.className = "thinking-block";
+
+    var header = document.createElement("div");
+    header.className = "thinking-toggle";
+    var label = "🦀 Thought for " + formatDuration(metadata.thinkingMs || 0);
+    if (metadata.thinking) {
+        label += " (click to expand)";
+    }
+    header.textContent = label;
+    wrap.appendChild(header);
+
+    if (metadata.thinking) {
+        var body = document.createElement("div");
+        body.className = "thinking-body hidden";
+        body.textContent = metadata.thinking;
+        wrap.appendChild(body);
+
+        header.onclick = function() {
+            body.classList.toggle("hidden");
+            header.textContent = "🦀 Thought for " + formatDuration(metadata.thinkingMs || 0) +
+                (body.classList.contains("hidden") ? " (click to expand)" : " (click to collapse)");
+        };
+    }
+
+    return wrap;
+}
+
+function renderToolCall(tc) {
+    var wrap = document.createElement("div");
+    wrap.className = "tool-call";
+
+    var border = "─".repeat(Math.max(tc.name.length + 8, 20));
+    var top = "╭─ " + tc.name + " ─╮";
+    var bottom = "╰" + border + "╯";
+
+    var argsText = "";
+    if (tc.args) {
+        try {
+            argsText = JSON.stringify(tc.args, null, 2);
+        } catch (e) {
+            argsText = String(tc.args);
+        }
+    }
+
+    var html = '<div class="tool-box-border">' + esc(top) + '</div>';
+    if (argsText) {
+        html += '<div class="tool-box-body">' + esc(argsText) + '</div>';
+    }
+    html += '<div class="tool-box-border">' + esc(bottom) + '</div>';
+
+    if (tc.result) {
+        var isErr = /error|fail|exception/i.test(tc.result);
+        var icon = isErr ? "✗" : "✓";
+        var cls = isErr ? "tool-result-err" : "tool-result-ok";
+        html += '<div class="' + cls + '">' + icon + " " + esc(tc.result) + '</div>';
+    }
+
+    wrap.innerHTML = html;
+    return wrap;
+}
+
+function formatDuration(ms) {
+    if (ms < 1000) return ms + "ms";
+    if (ms < 60000) return (ms / 1000).toFixed(1) + "s";
+    return Math.floor(ms / 60000) + "m " + Math.floor((ms % 60000) / 1000) + "s";
+}
+
 function sendMessage() {
     var input = $("msg-input");
     var text = input.value.trim();
@@ -253,7 +396,7 @@ function sendMessage() {
     input.value = "";
     input.style.height = "auto";
     $("send-btn").disabled = true;
-    appendMessageToDOM("user", text, true);
+    appendMessageToDOM("user", text, true, Date.now(), null);
     api("POST", "/v1/sessions/" + currentSessionId + "/plaintext-messages", { role: "user", content: text })
         .then(function() { if (currentSessionId) loadMessages(); })
         .catch(function(e) { console.error(e); });
@@ -279,7 +422,12 @@ document.querySelectorAll(".connect-tab").forEach(function(tab) {
         document.querySelectorAll(".connect-tab").forEach(function(t) { t.classList.remove("active"); });
         document.querySelectorAll(".connect-form").forEach(function(f) { f.classList.remove("active"); });
         tab.classList.add("active");
-        $(tab.dataset.target).classList.add("active");
+        var target = $(tab.dataset.target);
+        target.classList.add("active");
+        // Clear errors and focus first input
+        document.querySelectorAll(".connect-form .error").forEach(function(e) { e.textContent = ""; });
+        var firstInput = target.querySelector("input");
+        if (firstInput) firstInput.focus();
     };
 });
 
@@ -348,7 +496,16 @@ function logout() {
     location.reload();
 }
 
-function refresh() { loadSessions(); loadMachines(); loadTokens(); if (currentSessionId) loadMessages(); }
+function refresh() {
+    loadSessions();
+    loadMachines();
+    loadTokens();
+    if (currentSessionId) {
+        var current = allSessions.find(function(s) { return s.id === currentSessionId; });
+        if (current) updateInputVisibility(current);
+        loadMessages();
+    }
+}
 
 // Tokens
 function generateToken() {

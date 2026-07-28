@@ -408,6 +408,8 @@ model PlaintextMessage {
     sessionId String
     role      String
     content   String
+    /// [PlaintextMessageMetadata]
+    metadata  Json?
     createdAt DateTime @default(now())
 
     @@index([sessionId, createdAt])

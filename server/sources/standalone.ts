@@ -140,6 +140,10 @@ async function serve() {
         injectHtmlConfig,
     });
 
+    // Restore accounts/tokens from backup if the database was reset.
+    const { restoreIfEmpty } = await import("./app/backup");
+    await restoreIfEmpty();
+
     // Block until shutdown so the process stays alive.
     const { awaitShutdown } = await import("./utils/shutdown");
     await awaitShutdown();

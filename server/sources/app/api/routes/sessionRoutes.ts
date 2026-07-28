@@ -25,6 +25,7 @@ export function sessionRoutes(app: Fastify) {
                 seq: true,
                 createdAt: true,
                 updatedAt: true,
+                tag: true,
                 metadata: true,
                 metadataVersion: true,
                 agentState: true,
@@ -68,6 +69,7 @@ export function sessionRoutes(app: Fastify) {
                     seq: v.seq,
                     createdAt: v.createdAt.getTime(),
                     updatedAt: sessionUpdatedAt,
+                    tag: v.tag,
                     active: v.active,
                     activeAt: v.lastActiveAt.getTime(),
                     metadata: v.metadata,
@@ -76,7 +78,7 @@ export function sessionRoutes(app: Fastify) {
                     agentStateVersion: v.agentStateVersion,
                     dataEncryptionKey: v.dataEncryptionKey ? Buffer.from(v.dataEncryptionKey).toString('base64') : null,
                     lastMessage: null,
-                    machineName: v.metadata,
+                    machineName: v.tag,
                     msgCount: msgCount,
                     isPlaintext: msgCount > 0
                 };
@@ -403,18 +405,33 @@ export function sessionRoutes(app: Fastify) {
     // Plaintext messages — for ccd sessions (no E2E encryption)
     app.get('/v1/sessions/:sessionId/plaintext-messages', {
         preHandler: app.authenticate,
-        schema: { params: z.object({ sessionId: z.string() }) },
+        schema: {
+            params: z.object({ sessionId: z.string() }),
+            querystring: z.object({
+                after: z.string().optional(),
+                role: z.string().optional(),
+                limit: z.coerce.number().int().min(1).max(200).default(200),
+            }).optional(),
+        },
     }, async (request, reply) => {
+        const query = request.query as { after?: string; role?: string; limit?: number } | undefined;
+        const where: { sessionId: string; role?: string; id?: { gt: string } } = {
+            sessionId: request.params.sessionId,
+        };
+        if (query?.role) where.role = query.role;
+        if (query?.after) where.id = { gt: query.after };
+
         const messages = await db.plaintextMessage.findMany({
-            where: { sessionId: request.params.sessionId },
+            where,
             orderBy: { createdAt: 'asc' },
-            take: 200,
+            take: query?.limit || 200,
         });
         return reply.send({
             messages: messages.map((m) => ({
                 id: m.id,
                 role: m.role,
                 content: m.content,
+                metadata: m.metadata || null,
                 createdAt: m.createdAt.getTime(),
             })),
         });
@@ -424,7 +441,26 @@ export function sessionRoutes(app: Fastify) {
         preHandler: app.authenticate,
         schema: {
             params: z.object({ sessionId: z.string() }),
-            body: z.object({ role: z.string(), content: z.string() }),
+            body: z.object({
+                role: z.string(),
+                content: z.string(),
+                metadata: z.object({
+                    thinking: z.string().optional(),
+                    thinkingMs: z.number().optional(),
+                    bakedMs: z.number().optional(),
+                    toolCalls: z.array(z.object({
+                        name: z.string(),
+                        args: z.record(z.string(), z.unknown()).optional(),
+                        result: z.string().optional(),
+                        durationMs: z.number().optional(),
+                    })).optional(),
+                    tokens: z.object({
+                        input: z.number().optional(),
+                        output: z.number().optional(),
+                        cost: z.number().optional(),
+                    }).optional(),
+                }).optional(),
+            }),
         },
     }, async (request, reply) => {
         const msg = await db.plaintextMessage.create({
@@ -432,6 +468,7 @@ export function sessionRoutes(app: Fastify) {
                 sessionId: request.params.sessionId,
                 role: request.body.role,
                 content: request.body.content,
+                metadata: request.body.metadata || undefined,
             },
         });
         return reply.send({ id: msg.id });

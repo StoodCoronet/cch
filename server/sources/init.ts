@@ -13,8 +13,9 @@ async function init() {
     await pg.exec(`
         CREATE TABLE IF NOT EXISTS "BootstrapToken" (
             "id" TEXT PRIMARY KEY,
-            "accountId" TEXT NOT NULL REFERENCES "Account"("id"),
+            "accountId" TEXT NOT NULL REFERENCES "Account"("id") ON DELETE CASCADE ON UPDATE CASCADE,
             "tokenHash" TEXT NOT NULL UNIQUE,
+            "tokenPlaintext" TEXT,
             "label" TEXT,
             "machineId" TEXT,
             "revokedAt" TIMESTAMPTZ,
@@ -30,6 +31,7 @@ async function init() {
             "sessionId" TEXT NOT NULL,
             "role" TEXT NOT NULL,
             "content" TEXT NOT NULL,
+            "metadata" JSONB,
             "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now()
         );
         CREATE INDEX IF NOT EXISTS "PlaintextMessage_sessionId_createdAt_idx"

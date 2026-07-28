@@ -1,209 +1,10 @@
-//! ccd — Claude Code Daemon
-//! Socket.IO real-time connection + REST heartbeat + JSONL message sync.
+//! ccd — Claude Code Daemon (interactive bidirectional mode)
+//! TUI profile picker + daemon commands (start/stop/status) with bridge enabled.
 
 use anyhow::{Context, Result};
-use cct::config;
-use serde_json::json;
+use cct::daemon_control;
 use std::process::Command;
-use std::time::Duration;
-use std::{env, fs};
-use tokio::time;
-
-fn hostname() -> String {
-    Command::new("hostname").output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_else(|_| "unknown".into())
-}
-fn token_cache_path() -> std::path::PathBuf { dirs::home_dir().unwrap_or_default().join(".cch").join("token") }
-fn pid_file() -> std::path::PathBuf { dirs::home_dir().unwrap_or_default().join(".cch").join("ccd.pid") }
-
-fn bootstrap(server: &str, token: &str) -> Result<String> {
-    let client = reqwest::blocking::Client::builder().no_proxy().build().expect("reqwest");
-    let resp = client.post(format!("{server}/v1/auth/bootstrap"))
-        .json(&json!({ "token": token, "hostname": hostname() }))
-        .timeout(Duration::from_secs(15)).send()
-        .context("cannot reach server — is it running?")?;
-    anyhow::ensure!(resp.status().is_success(), "bootstrap returned {} — token may be invalid", resp.status());
-    Ok(resp.json::<serde_json::Value>()?["token"].as_str().unwrap().to_string())
-}
-
-fn get_or_bootstrap_auth(hc: &config::HappyConfig) -> Result<String> {
-    match fs::read_to_string(token_cache_path()) {
-        Ok(t) if t.starts_with(&hc.server) => Ok(t.split('|').nth(1).unwrap_or("").trim().to_string()),
-        _ => {
-            let tok = bootstrap(&hc.server, &hc.token)?;
-            let _ = fs::create_dir_all(token_cache_path().parent().unwrap());
-            let _ = fs::write(token_cache_path(), format!("{}|{}", hc.server, tok));
-            Ok(tok)
-        }
-    }
-}
-
-async fn run_daemon() -> Result<()> {
-    let hc = config::load_happy_config().context("Not connected. Run 'ccd connect <url>' first.")?;
-    let auth_token = get_or_bootstrap_auth(&hc)?;
-    let machine = hostname();
-
-    // REST heartbeat + JSONL sync. Socket.IO deferred (rust_socketio auth incompatible with server v4.8).
-    let client = reqwest::blocking::Client::builder().no_proxy().build().unwrap();
-    let _ = client.post(format!("{}/v1/machines/{machine}/heartbeat", hc.server))
-        .header("Authorization", format!("Bearer {auth_token}"))
-        .timeout(Duration::from_secs(5)).send();
-
-    println!("ccd: online — {}", machine);
-
-    let server = hc.server.clone();
-    let auth = auth_token.clone();
-    let mach = machine.clone();
-    let mut heartbeat_tick = time::interval(Duration::from_secs(30));
-    let mut sync_tick = time::interval(Duration::from_millis(500));
-
-    loop {
-        tokio::select! {
-            _ = heartbeat_tick.tick() => {
-                let srv = server.clone(); let tok = auth.clone(); let mid = mach.clone();
-                tokio::task::spawn_blocking(move || {
-                    let c = reqwest::blocking::Client::builder().no_proxy().build().unwrap();
-                    let _ = c.post(format!("{srv}/v1/machines/{mid}/heartbeat"))
-                        .header("Authorization", format!("Bearer {tok}"))
-                        .timeout(Duration::from_secs(5)).send();
-                }).await.ok();
-            }
-            _ = sync_tick.tick() => {
-                let srv = server.clone(); let tok = auth.clone();
-                tokio::task::spawn_blocking(move || sync_jsonl(&srv, &tok)).await.ok();
-            }
-        }
-    }
-}
-
-fn sync_jsonl(server: &str, auth: &str) {
-    let track_dir = dirs::home_dir().unwrap_or_default().join(".cch").join("sessions");
-    if !track_dir.exists() { eprintln!("ccd: no track dir"); return; }
-    let claude_dir = dirs::home_dir().unwrap_or_default().join(".claude").join("projects");
-    let client = reqwest::blocking::Client::builder().no_proxy().build().unwrap();
-
-    // Sync only the most recently created tracking file to avoid cross-contamination
-    let latest_track = std::fs::read_dir(&track_dir).into_iter().flatten()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map_or(false, |e| e == "json"))
-        .max_by_key(|e| e.metadata().ok().and_then(|m| m.created().ok()).unwrap_or(std::time::UNIX_EPOCH));
-
-    let entry = match latest_track { Some(e) => e, None => return };
-    let path = entry.path();
-    let offset_path = path.with_extension("offset");
-    let track: serde_json::Value = match fs::read_to_string(&path).ok().and_then(|s| serde_json::from_str(&s).ok()) {
-        Some(v) => v, None => return
-    };
-    let session_id = track["sessionId"].as_str().unwrap_or("");
-    let cwd = track["cwd"].as_str().unwrap_or("");
-    if session_id.is_empty() || cwd.is_empty() { return; }
-
-    {
-        let proj_name = cwd.replace('/', "-").replace('_', "-");
-        let proj_path = claude_dir.join(&proj_name);
-        let mut jsonls: Vec<_> = match std::fs::read_dir(&proj_path) {
-            Ok(entries) => entries
-                .filter_map(|e| e.ok())
-                .filter(|e| e.path().extension().map_or(false, |e| e == "jsonl"))
-                .collect(),
-            Err(e) => { eprintln!("ccd: read_dir error: {e}"); return }
-        };
-        // Only JSONLs created/modified after this session started
-        let track_created = entry.metadata().ok().and_then(|m| m.created().ok()).unwrap_or(std::time::UNIX_EPOCH);
-        jsonls.retain(|e| std::fs::metadata(e.path()).ok().and_then(|m| m.modified().ok()).unwrap_or(std::time::UNIX_EPOCH) >= track_created);
-        jsonls.sort_by_key(|e| std::fs::metadata(e.path()).ok().and_then(|m| m.modified().ok()).unwrap_or(std::time::UNIX_EPOCH));
-        jsonls.reverse();
-        let jsonl = match jsonls.first() {
-            Some(j) => j.path(),
-            None => { eprintln!("ccd: no JSONL in {:?}", claude_dir.join(&proj_name)); return }
-        };
-        eprintln!("ccd: syncing {}", jsonl.display());
-
-        let offset: u64 = fs::read_to_string(&offset_path).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0);
-        if let Ok(meta) = jsonl.metadata() {
-            let size = meta.len();
-            if size > offset {
-                if let Ok(content) = fs::read(&jsonl) {
-                    for line in content[offset as usize..].split(|&b| b == b'\n') {
-                        if line.is_empty() { continue; }
-                        if let Ok(msg) = serde_json::from_slice::<serde_json::Value>(line) {
-                            let role = msg["type"].as_str().unwrap_or("");
-                            let text = if let Some(arr) = msg["message"]["content"].as_array() {
-                                arr.iter().filter_map(|x| x["text"].as_str()).collect::<Vec<_>>().join("")
-                            } else {
-                                msg["message"]["content"].as_str().unwrap_or("").to_string()
-                            };
-                            if !text.is_empty() && (role == "user" || role == "assistant") {
-                                let _ = client
-                                    .post(format!("{server}/v1/sessions/{session_id}/plaintext-messages"))
-                                    .header("Authorization", format!("Bearer {auth}"))
-                                    .json(&json!({ "role": role, "content": text })).send();
-                            }
-                        }
-                    }
-                    // Update session activity timestamp
-                    let _ = client
-                        .post(format!("{server}/v1/sessions/{session_id}/activity"))
-                        .header("Authorization", format!("Bearer {auth}"))
-                        .timeout(Duration::from_secs(3)).send();
-                    let _ = fs::write(&offset_path, size.to_string());
-                }
-            }
-            // Only auto-clean if the JSONL hasn't been modified recently (claude exited)
-            if let Ok(meta) = jsonl.metadata() {
-                if let Ok(m) = meta.modified() {
-                    let age = std::time::SystemTime::now().duration_since(m).unwrap_or_default();
-                    if age.as_secs() > 300 { // 5 min since last write = session ended
-                        let _ = fs::remove_file(&path);
-                        let _ = fs::remove_file(&offset_path);
-                    }
-                }
-            }
-        }
-    }
-}
-
-// CLI
-
-fn start_background() -> Result<()> {
-    let pp = pid_file();
-    if pp.exists() {
-        let pid = fs::read_to_string(&pp).unwrap_or_default().trim().to_string();
-        if !pid.is_empty() && Command::new("kill").arg("-0").arg(&pid).status().map(|s| s.success()).unwrap_or(false) {
-            println!("ccd: already running (PID: {pid})"); return Ok(());
-        }
-    }
-    let exe = env::current_exe()?;
-    let child = Command::new(&exe).arg("foreground")
-        .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn()?;
-    let _ = fs::create_dir_all(pp.parent().unwrap());
-    fs::write(&pp, child.id().to_string())?;
-    println!("ccd: started (PID: {})", child.id());
-    Ok(())
-}
-
-fn stop_daemon() -> Result<()> {
-    let pp = pid_file();
-    if !pp.exists() { println!("ccd: not running"); return Ok(()); }
-    let pid = fs::read_to_string(&pp).unwrap_or_default().trim().to_string();
-    if !pid.is_empty() { let _ = Command::new("kill").arg(&pid).status(); let _ = fs::remove_file(&pp); println!("ccd: stopped"); }
-    Ok(())
-}
-
-fn show_status() -> Result<()> {
-    match config::load_happy_config() {
-        Some(hc) => { let m = if hc.token.len() > 8 { format!("{}...{}", &hc.token[..4], &hc.token[hc.token.len()-4..]) } else { "****".into() }; println!("Server: {}\nToken:  {m}", hc.server); }
-        None => println!("Server: not configured"),
-    }
-    let pp = pid_file();
-    if !pp.exists() { println!("Daemon: not running"); return Ok(()); }
-    let pid = fs::read_to_string(&pp).unwrap_or_default().trim().to_string();
-    if Command::new("kill").arg("-0").arg(&pid).status().map(|s| s.success()).unwrap_or(false) {
-        println!("Daemon: running (PID: {pid})\nMachine: {}", hostname());
-    } else { println!("Daemon: stopped (stale PID)"); let _ = fs::remove_file(&pp); }
-    Ok(())
-}
+use std::env;
 
 fn do_connect(url: &str) -> Result<()> {
     let (server, token) = cct::launch::parse_connection_url(url)?;
@@ -218,7 +19,12 @@ fn run_profile(name: Option<&str>) -> Result<()> {
         Some(n) => cct::config::find_profile_by_name(n)?.ok_or_else(|| anyhow::anyhow!("Profile '{}' not found", n))?,
         None => profiles.into_iter().next().ok_or_else(|| anyhow::anyhow!("No profiles. Run 'ccd add' first."))?,
     };
-    let err = cct::launch::exec_claude(&profile, false);
+    // Spawn bridge in background before exec replaces this process
+    let exe = env::current_exe()?;
+    let _ = Command::new(&exe).arg("bridge")
+        .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
+        .spawn()?;
+    let err = cct::launch::exec_claude_ccd(&profile, false);
     eprintln!("Error: {err:#}"); std::process::exit(1);
 }
 
@@ -244,7 +50,12 @@ fn run_tui() -> Result<()> {
                     (KeyCode::Up, _)|(KeyCode::Char('k'), _) => app.prev(),
                     (KeyCode::Enter, _) if !app.profiles.is_empty() => {
                         cct::launch::restore_terminal();
-                        let err = cct::launch::exec_claude(&app.profiles[app.selected], false);
+                        // Spawn bridge in background before exec replaces this process
+                        let exe = env::current_exe()?;
+                        let _ = Command::new(&exe).arg("bridge")
+                            .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
+                            .spawn()?;
+                        let err = cct::launch::exec_claude_ccd(&app.profiles[app.selected], false);
                         eprintln!("Error: {err:#}"); std::process::exit(1);
                     }
                     _ => {}
@@ -264,12 +75,22 @@ fn main() {
         "run" => run_profile(args.get(2).map(|s| s.as_str())),
         "add" => { let be = args.get(2).and_then(|b| if b=="codex"{Some(cct::config::Backend::Codex)}else if b=="kimi"{Some(cct::config::Backend::Kimi)}else{None}); cct::cli::run_add(None, be.map(|b| format!("{:?}",b).to_lowercase())) },
         "edit" => { let p = cct::config::config_path(); cct::launch::open_editor(&p) },
-        "start" => start_background(),
-        "foreground" => { let rt = tokio::runtime::Runtime::new().unwrap(); rt.block_on(run_daemon()) },
-        "stop" => stop_daemon(),
-        "status" => show_status(),
+        "start" => daemon_control::start_background(true, ".ccd/ccd_sessions"),
+        "foreground" => {
+            let interactive = args.iter().any(|a| a == "--interactive");
+            let session_dir = args.iter().position(|a| a == "--session-dir")
+                .and_then(|i| args.get(i + 1))
+                .map(|s| s.as_str())
+                .unwrap_or(".ccd/ccd_sessions");
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(daemon_control::run_daemon(interactive, session_dir))
+        },
+        "bridge" => { let rt = tokio::runtime::Runtime::new().unwrap(); rt.block_on(cct::bridge::run_bridge()) },
+        "stop" => daemon_control::stop_daemon(),
+        "status" => daemon_control::show_status(),
+        "tui" => run_tui(),
         "" => run_tui(),
-        _ => { println!("ccd <connect|disconnect|run|add|edit|start|stop|status>"); Ok(()) }
+        _ => { println!("ccd <connect|disconnect|run|add|edit|start|stop|status|tui>"); Ok(()) }
     };
     if let Err(e) = result { eprintln!("ccd: {e:#}"); std::process::exit(1); }
 }

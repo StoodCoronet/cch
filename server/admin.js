@@ -37,7 +37,7 @@ function loadAccounts() {
         tbody.innerHTML = "";
         var accounts = data.accounts || [];
         if (accounts.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="4" class="empty">No accounts yet</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="5" class="empty">No accounts yet</td></tr>';
             return;
         }
         var maxSessions = Math.max(1, accounts.reduce(function(m, a) { return Math.max(m, a.sessionCount || 0); }, 0));

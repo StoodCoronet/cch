@@ -9,6 +9,7 @@ import {
     revokeBootstrapToken,
 } from "@/app/auth/bootstrapToken";
 import { hashPassword, serializePasswordRecord } from "@/app/auth/password";
+import { backupNow } from "@/app/backup";
 
 function adminAuth(request: any, reply: any): boolean {
     const password = process.env.ADMIN_PASSWORD;
@@ -81,6 +82,8 @@ export function adminRoutes(app: Fastify) {
             },
         });
 
+        await backupNow();
+
         return reply.send({
             accountId: account.id,
             username: account.username,
@@ -150,6 +153,8 @@ export function adminRoutes(app: Fastify) {
                 // Finally the account itself.
                 db.account.delete({ where: { id: accountId } }),
             ]);
+
+            await backupNow();
 
             return reply.send({ success: true });
         } catch (e: any) {
@@ -247,6 +252,10 @@ export function adminRoutes(app: Fastify) {
         preHandler: app.authenticate,
         schema: { body: z.object({ label: z.string().optional() }) },
     }, async (request, reply) => {
+        const account = await db.account.findUnique({ where: { id: request.userId } });
+        if (!account) {
+            return reply.code(401).send({ error: 'Account not found' });
+        }
         const result = await createBootstrapToken({
             accountId: request.userId,
             label: request.body.label,

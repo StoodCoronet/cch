@@ -64,6 +64,10 @@ enum Commands {
     Disconnect,
     /// Show current happy connection status
     Status,
+    /// Start the background daemon (read-only monitoring)
+    Start,
+    /// Stop the background daemon
+    Stop,
 }
 
 fn main() -> Result<()> {
@@ -103,8 +107,18 @@ fn main() -> Result<()> {
         Some(Commands::Connect { url }) => run_connect(&url),
         Some(Commands::Disconnect) => run_disconnect(),
         Some(Commands::Status) => run_status(),
+        Some(Commands::Start) => run_daemon_start(),
+        Some(Commands::Stop) => run_daemon_stop(),
         None => run_tui(),
     }
+}
+
+fn run_daemon_start() -> Result<()> {
+    cct::daemon_control::start_background(false, ".cch/cch_sessions")
+}
+
+fn run_daemon_stop() -> Result<()> {
+    cct::daemon_control::stop_daemon()
 }
 
 fn run_profile(name: Option<String>) -> Result<()> {
@@ -118,7 +132,7 @@ fn run_profile(name: Option<String>) -> Result<()> {
         }
     };
     let err = match profile.backend {
-        config::Backend::Claude => launch::exec_claude(&profile, false),
+        config::Backend::Claude => launch::exec_claude_cch(&profile, false),
         config::Backend::Codex => launch::exec_codex(&profile),
         config::Backend::Kimi => launch::exec_kimi(&profile),
     };
@@ -328,7 +342,7 @@ fn run_tui() -> Result<()> {
                         launch::restore_terminal();
                         let profile = &app.profiles[app.selected];
                         let err = match profile.backend {
-                            config::Backend::Claude => launch::exec_claude(profile, false),
+                            config::Backend::Claude => launch::exec_claude_cch(profile, false),
                             config::Backend::Codex => launch::exec_codex(profile),
                             config::Backend::Kimi => launch::exec_kimi(profile),
                         };
@@ -339,7 +353,7 @@ fn run_tui() -> Result<()> {
                         let profile = &app.profiles[app.selected];
                         if profile.backend == config::Backend::Claude {
                             launch::restore_terminal();
-                            let err = launch::exec_claude(profile, true);
+                            let err = launch::exec_claude_cch(profile, true);
                             eprintln!("Error: {err:#}");
                             std::process::exit(1);
                         }

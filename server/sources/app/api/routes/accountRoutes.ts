@@ -8,6 +8,7 @@ import { allocateUserSeq } from "@/storage/seq";
 import { log } from "@/utils/log";
 import { AccountProfile } from "@/types";
 import { hashPassword, serializePasswordRecord } from "@/app/auth/password";
+import { backupNow } from "@/app/backup";
 
 export function accountRoutes(app: Fastify) {
     app.get('/v1/account/profile', {
@@ -191,6 +192,7 @@ export function accountRoutes(app: Fastify) {
             where: { id: userId },
             data: { passwordHash: serializePasswordRecord(await hashPassword(request.body.password)) },
         });
+        await backupNow();
         return reply.send({ success: true });
     });
 

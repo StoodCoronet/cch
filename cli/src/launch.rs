@@ -72,7 +72,7 @@ pub fn build_launch_command(profile: &Profile, with_continue: bool) -> (String, 
 
 /// Inject profile env vars and exec-replace the current process with `claude`.
 /// When `[happy]` is configured globally, reports machine/session to server first.
-pub fn exec_claude(profile: &Profile, with_continue: bool) -> anyhow::Error {
+fn exec_claude_impl(profile: &Profile, with_continue: bool, track_dir: &std::path::Path) -> anyhow::Error {
     let happy = crate::config::load_happy_config();
     let use_happy = happy.is_some() && profile.happy != Some(false);
 
@@ -112,12 +112,12 @@ pub fn exec_claude(profile: &Profile, with_continue: bool) -> anyhow::Error {
         match report_session(&hc.server, &token, &cwd, &hostname) {
             Ok(session_id) => {
                 // Write tracking file so daemon can sync messages
-                let track_dir = dirs::home_dir().unwrap_or_default().join(".cch").join("sessions");
-                let _ = fs::create_dir_all(&track_dir);
+                let _ = fs::create_dir_all(track_dir);
                 let track = serde_json::json!({
                     "sessionId": session_id,
                     "cwd": cwd,
                     "hostname": hostname,
+                    "profile": profile.name,
                 });
                 let _ = fs::write(track_dir.join(format!("{session_id}.json")), track.to_string());
             }
@@ -130,6 +130,50 @@ pub fn exec_claude(profile: &Profile, with_continue: bool) -> anyhow::Error {
         let err = Command::new("claude").args(&args).exec();
         anyhow::anyhow!("exec claude: {err}")
     }
+}
+
+/// cch version: one-way monitoring, isolated tracking directory.
+/// Session is created eagerly on launch (read-only monitoring).
+pub fn exec_claude_cch(profile: &Profile, with_continue: bool) -> anyhow::Error {
+    let track_dir = dirs::home_dir().unwrap_or_default().join(".cch").join("cch_sessions");
+    exec_claude_impl(profile, with_continue, &track_dir)
+}
+
+/// ccd version: bidirectional interaction, isolated tracking directory.
+/// Writes a tracking file without a sessionId; the daemon creates the session
+/// lazily when the first message arrives, so empty sessions never appear in the webui.
+pub fn exec_claude_ccd(profile: &Profile, with_continue: bool) -> anyhow::Error {
+    let track_dir = dirs::home_dir().unwrap_or_default().join(".ccd").join("ccd_sessions");
+    let cwd = env::current_dir().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+    let hostname = Command::new("hostname")
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_else(|_| "unknown".to_string());
+
+    // Write tracking file without sessionId; daemon will fill it in on first message
+    let _ = fs::create_dir_all(&track_dir);
+    let track = serde_json::json!({
+        "sessionId": "",
+        "cwd": cwd,
+        "hostname": hostname,
+        "profile": profile.name,
+    });
+    let track_path = track_dir.join(format!("pending-{}.json", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()));
+    let _ = fs::write(&track_path, track.to_string());
+
+    exec_claude_impl_no_session(profile, with_continue)
+}
+
+fn exec_claude_impl_no_session(profile: &Profile, with_continue: bool) -> anyhow::Error {
+    set_claude_default_env();
+    if let Some(env_map) = &profile.env {
+        for (k, v) in env_map {
+            env::set_var(k, v);
+        }
+    }
+    let args = build_args(profile, with_continue);
+    let err = Command::new("claude").args(&args).exec();
+    anyhow::anyhow!("exec claude: {err}")
 }
 
 // ---- MVP: direct server communication ----

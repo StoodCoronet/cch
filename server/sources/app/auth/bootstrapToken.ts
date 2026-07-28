@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { db } from "@/storage/db";
+import { backupNow } from "@/app/backup";
 
 function hashToken(token: string): string {
     return createHash("sha256").update(token).digest("hex");
@@ -40,6 +41,7 @@ export async function createBootstrapToken(params: {
             label: params.label ?? null,
         },
     });
+    await backupNow();
     return {
         plaintext,
         record: {
@@ -76,6 +78,7 @@ export async function revokeBootstrapToken(id: string): Promise<boolean> {
             where: { id },
             data: { revokedAt: new Date() },
         });
+        await backupNow();
         return true;
     } catch {
         return false;

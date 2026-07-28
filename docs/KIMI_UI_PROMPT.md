@@ -1,66 +1,249 @@
-# CCH Web UI 聊天渲染改进
+# KIMI UI PROMPT — CCH Web Dashboard
 
-## 背景
+You are a senior frontend engineer. Rebuild the web dashboard for **CCH (Claude Code with Happy)**, a self-hosted session-monitoring server. The output must be production-ready, static HTML/CSS/JS served by a Node.js backend. No build step, no framework.
 
-当前 CCH web dashboard 的消息渲染太简陋——纯文本，没有格式化。Claude Code 的消息流中包含 tool use（bash 命令执行、文件 diff、搜索结果等），这些需要像 Claude Code CLI 一样渲染。
+---
 
-## JSONL 消息格式
+## 1. Context
 
-daemon 从 `~/.claude/projects/<项目>/<uuid>.jsonl` 读取的每一行 JSON 包含：
+CCH collects Claude Code sessions from multiple machines via a Rust CLI (`cch`) and daemon (`ccd`). Users open a browser to watch sessions, view messages, and manage connection tokens.
 
-```json
-{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"xxx","content":[{"type":"text","text":"diff --git ..."}]}]}}
-{"type":"assistant","message":{"model":"deepseek-v4-pro","content":[{"type":"text","text":"你好！"},{"type":"tool_use","id":"xxx","name":"Bash","input":{"command":"git diff"}}]}
+**Two pages:**
+- `/` — user dashboard (sessions, machines, token management)
+- `/admin` — admin panel (account management, stats)
+
+**Reference style:** DeepSeek web UI — clean, modern, dark-first but default light, generous whitespace, subtle borders, smooth micro-interactions.
+
+---
+
+## 2. Design Tokens
+
+Use CSS custom properties. **Default theme is light.** `data-theme="dark"` overrides.
+
+```css
+:root {
+  --bg: #fafafa;
+  --bg-elevated: #ffffff;
+  --bg-hover: #f3f4f6;
+  --bg-active: #e5e7eb;
+  --bg-input: #ffffff;
+  --fg: #171717;
+  --fg-secondary: #525252;
+  --fg-tertiary: #a3a3a3;
+  --border: #e5e5e5;
+  --border-strong: #d4d4d4;
+  --accent: #4f46e5;
+  --accent-hover: #4338ca;
+  --accent-light: #6366f1;
+  --green: #16a34a;
+  --red: #dc2626;
+  --shadow: 0 4px 24px rgba(0,0,0,.08);
+}
+[data-theme="dark"] {
+  --bg: #0d0d0d;
+  --bg-elevated: #171717;
+  --bg-hover: #1f1f1f;
+  --bg-active: #262626;
+  --bg-input: #1e1e1e;
+  --fg: #f5f5f5;
+  --fg-secondary: #a3a3a3;
+  --fg-tertiary: #737373;
+  --border: #262626;
+  --border-strong: #333333;
+  --accent: #4f46e5;
+  --accent-hover: #5b54e6;
+  --accent-light: #818cf8;
+  --green: #22c55e;
+  --red: #ef4444;
+  --shadow: 0 4px 24px rgba(0,0,0,.35);
+}
 ```
 
-**关键消息类型：**
-- `type: "user"` — 用户输入
-- `type: "assistant"` — AI 回复（包含 text + tool_use + tool_result）
-- `type: "system"` — 系统消息（可选忽略）
+Typography: `-apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif`. Code: `"SF Mono", "Fira Code", monospace`.
 
-**content 数组元素类型：**
-- `{"type":"text","text":"..."}` — 普通文本
-- `{"type":"tool_use","id":"...","name":"Bash","input":{"command":"git diff"}}` — AI 调用工具
-- `{"type":"tool_result","tool_use_id":"...","content":[{"type":"text","text":"..."}]}` — 工具执行结果
+---
 
-## 需求
+## 3. Page `/` — User Dashboard
 
-### 1. 消息气泡渲染
+### 3.1 Layout
 
-参考 Claude Code CLI 风格（深色终端，绿字），做聊天框的消息渲染：
+```
+┌─────────────────────────────────────────────────────────────┐
+│ [☰] CCH          [+ Device] [🌙] [↻] [→]                    │ ← sidebar header
+├──────────────┬──────────────────────────────────────────────┤
+│ Search...    │                                              │
+│              │                                              │
+│ Sessions (N) │   ┌─ Chat Header ─────────────────────────┐  │
+│ ● tag-name   │   │ Select a session                      │  │
+│   12 msgs·3h │   └───────────────────────────────────────┘  │
+│ ○ tag-name   │                                              │
+│   45 msgs·1d │   ┌─ Messages ────────────────────────────┐  │
+│              │   │                                       │  │
+│ Machines (M) │   │  [user] fix the login bug             │  │
+│ ● macbook    │   │  [assistant] I found the issue...     │  │
+│   just now   │   │                                       │  │
+│              │   └───────────────────────────────────────┘  │
+│              │                                              │
+│              │   ┌─ Input ────────────────────────────────┐ │
+│              │   │ > Send a message...          [Send]   │ │
+│              │   └───────────────────────────────────────┘ │
+└──────────────┴──────────────────────────────────────────────┘
+```
 
-- **用户消息**: 靠右对齐，浅色背景气泡，显示用户输入文本
-- **AI 消息**: 靠左对齐
-  - **普通文本**: 支持 markdown 渲染（代码块 ```、列表、粗体、斜体）
-  - **工具调用 (tool_use)**: 折叠面板，显示 `⏺ Bash(git diff src/daemon.rs)` 格式，点击展开查看命令内容 + 输出
-  - **工具结果 (tool_result)**: 折叠面板，显示 diff 或命令输出（等宽字体，深色背景）
-- **消息时间戳**: 每条消息右下角显示时间
+- **Sidebar:** fixed width (default 280px, draggable 220–500px via `.resizer`). Save width to `localStorage`.
+- **Main area:** flex column. Header, message area (scrollable), input area.
+- **Mobile (<768px):** sidebar slides in from left, main full-width.
 
-### 2. 侧边栏 Session 状态
+### 3.2 Sidebar
 
-- Session 列表显示 `活跃 · 2m` 而不是 `活跃 · 1d`（现在是固定的，需要实时更新）
-- 如果有 daemon 心跳，显示 "online"
-- 消息计数实时更新
+**Header:** logo "CCH", `+ Device` button, theme toggle (🌙/☀), refresh (↻), logout (→).
 
-### 3. 实时刷新
+**Search:** text input filters sessions by title/metadata.
 
-- 选中 session 后，每 2 秒拉取新消息（已实现，保持不变）
+**Sessions list:**
+- Each item: colored dot (green = active, gray = idle), title (from `metadata` or first 10 chars of id), meta line `{msgCount} msgs · {relativeTime}`.
+- Relative time: `<1m` → "just now", `<1h` → "Xm", `<24h` → "Xh", else "Xd".
+- Click → select, highlight, load messages, auto-scroll to bottom.
 
-### 4. 样式
+**Machines panel** (collapsible):
+- Header with count and chevron.
+- Each machine: name, last active time.
 
-- 深色主题（现已实现），亮色可选
-- 代码/终端区域：深色背景，等宽字体，绿/白色文字
-- 气泡：圆角，柔和阴影
+### 3.3 Main Area
 
-## 文件
+**Placeholder** (no session selected): centered logo, "Welcome to CCH", "Select a session from the sidebar."
 
-- `/Users/robye/workspace/self_host_happy/server/user.html` — HTML + CSS
-- `/Users/robye/workspace/self_host_happy/server/user.js` — JavaScript 逻辑
-- API: `GET /v1/sessions/:id/plaintext-messages` 返回 `{messages: [{role, content, createdAt}]}`
+**Chat header:** session title, created date, machine name.
 
-## 注意事项
+**Messages:**
+- `user` messages: right-aligned bubble (`--bg-active`), avatar "Y".
+- `assistant` messages: left-aligned, no bubble background, avatar "AI".
+- Role label above content.
+- Support code blocks: triple backticks → `<pre>` with copy button. Inline backticks → `<code>`.
+- Auto-scroll to bottom on load and on send.
 
-- 不要改 API 和服务端代码
-- 只改 user.html 和 user.js
-- message content 是纯文本，需要自己解析和渲染
-- 保持现有功能：session 选择、token 管理、主题切换
+**Input area** (only for plaintext sessions):
+- Textarea auto-resize (max 180px), Enter to send, Shift+Enter for newline.
+- Send button disabled when empty.
+- Below: hint "Press Enter to send, Shift+Enter for new line".
+
+### 3.4 Connect / Login Screen
+
+Full-screen overlay. Card (max-width 420px) with:
+- Logo + "Connect to your self-hosted server"
+- Tabs: **Token** / **Password**
+- Token tab: paste connection string or raw token. Auto-parse `?token=xxx` from URL.
+- Password tab: username + password fields.
+- Error message below button.
+- On success: store token/accountId in `localStorage`, hide overlay, load dashboard.
+
+### 3.5 Device Connect Modal
+
+Triggered by `+ Device` button. Modal (max-width 560px) with:
+
+**Generate New Token section:**
+- Label input (placeholder: "Label, e.g. macbook-pro")
+- "Generate Token" button
+- After generation: show connection URL in a box, plus three copy buttons:
+  - "Copy for cch" → `./target/release/cch connect 'URL'`
+  - "Copy for ccd" → `./target/release/ccd connect 'URL'`
+  - "Copy raw URL" → URL only
+
+**Active Tokens section:**
+- List items: label (click to edit inline), created time, action buttons.
+- Actions: Edit (inline rename), Copy link, cch, ccd, Revoke (red hover).
+- Revoke asks for confirmation.
+
+**Copy behavior:** always copy raw string without shell-escaping. Only add quotes when composing the `cch`/`ccd` command strings shown to the user.
+
+---
+
+## 4. Page `/admin` — Admin Panel
+
+### 4.1 Layout
+
+Centered container (max-width 900px).
+
+**Login screen:** card (max-width 380px) with admin password input, Login button, error display.
+
+**Main screen:**
+- Header: "CCH Admin" logo, server URL, theme toggle.
+- Stats grid (3 cards): Accounts, Active Sessions, Total Sessions.
+- Accounts section:
+  - Create row: username input, password input (optional), "Create Account" button.
+  - Table: User, Sessions, Share (bar), Created, Delete button.
+
+### 4.2 Interactions
+
+- Admin password stored in `localStorage` as `happy_admin_password`.
+- Stats auto-refresh every 30s.
+- Delete account asks for confirmation.
+- Theme persisted as `admin_theme`.
+
+---
+
+## 5. Global Requirements
+
+1. **Theme toggle:** icon button in header. Persist choice. Default `light`.
+2. **Auto-refresh:** user dashboard refreshes sessions/machines/tokens every 30s. When a session is selected, refresh messages every 2s.
+3. **Resizable sidebar:** drag handle (6px) on right edge. Min 220px, max 500px. Save to `localStorage`.
+4. **No shell-escaping surprises:** when copying connection strings, copy the raw URL. Only wrap in single quotes when composing the full `cch connect` or `ccd connect` command.
+5. **Mobile responsive:** sidebar hidden by default, hamburger menu to open. Main content full-width.
+6. **Accessibility:** all interactive elements have hover states, focus rings, and `cursor: pointer`.
+
+---
+
+## 6. API Endpoints
+
+All requests use `Authorization: Bearer <token>` except where noted.
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/v1/auth/bootstrap` | `{token, hostname}` → `{token, accountId, encryption}` |
+| `POST` | `/v1/auth/password` | `{username, password}` → `{token, accountId}` |
+| `GET` | `/v1/sessions` | List sessions (max 150) |
+| `GET` | `/v1/machines` | List machines |
+| `GET` | `/v1/sessions/:id/plaintext-messages` | Get session messages |
+| `POST` | `/v1/sessions/:id/plaintext-messages` | Send message `{role, content}` |
+| `GET` | `/v1/bootstrap-tokens` | List user's tokens |
+| `POST` | `/v1/bootstrap-tokens` | Create token `{label?}` → `{token, record: {connectionUrl, ...}}` |
+| `PATCH` | `/v1/bootstrap-tokens/:id` | Update label `{label}` |
+| `POST` | `/v1/bootstrap-tokens/:id/revoke` | Revoke token |
+| `GET` | `/v1/admin/stats` | Admin stats (auth via `Bearer ADMIN_PASSWORD`) |
+| `GET` | `/v1/admin/accounts` | List accounts |
+| `POST` | `/v1/admin/accounts` | Create account `{username, password?}` |
+| `DELETE` | `/v1/admin/accounts/:id` | Delete account |
+
+---
+
+## 7. Files
+
+| File | Purpose |
+|---|---|
+| `server/user.html` | User dashboard HTML + CSS |
+| `server/user.js` | User dashboard logic |
+| `server/admin.html` | Admin panel HTML + CSS |
+| `server/admin.js` | Admin panel logic |
+
+Constraints:
+- Plain HTML/CSS/JS. No frameworks, no bundlers, no external CSS/JS CDNs.
+- Keep all CSS in `<style>` tags, all JS in `<script src="...">` or inline `<script>`.
+- Use `var`, not `const`/`let` in global scope for consistency with existing code.
+- All API calls use the `api()` helper pattern already established.
+
+---
+
+## 8. Acceptance Criteria
+
+- [ ] Default theme is light; toggle persists to `localStorage`.
+- [ ] Sidebar width is draggable and persisted.
+- [ ] Sessions show relative time that updates on refresh.
+- [ ] Login screen supports both Token and Password tabs.
+- [ ] Token modal generates connection URLs and offers cch/ccd/raw copy buttons.
+- [ ] Token list allows inline label editing and revoke.
+- [ ] Messages render with role-based styling and code blocks with copy buttons.
+- [ ] Input area only appears for plaintext sessions.
+- [ ] Admin panel allows creating accounts with optional password.
+- [ ] Admin panel allows deleting accounts with confirmation.
+- [ ] Mobile view (<768px) works with hamburger menu.
+- [ ] No external dependencies beyond what is already in the repo.
