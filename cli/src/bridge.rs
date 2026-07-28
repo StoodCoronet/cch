@@ -52,7 +52,7 @@ fn load_latest_session() -> Option<BridgeSession> {
     let track_dir = dirs::home_dir().unwrap_or_default().join(".ccd").join("ccd_sessions");
     let latest = std::fs::read_dir(&track_dir).into_iter().flatten()
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map_or(false, |e| e == "json"))
+        .filter(|e| e.path().extension().is_some_and(|e| e == "json"))
         .max_by_key(|e| e.metadata().ok().and_then(|m| m.created().ok()).unwrap_or(std::time::UNIX_EPOCH))?;
     let track: serde_json::Value = serde_json::from_str(&fs::read_to_string(latest.path()).ok()?).ok()?;
     Some(BridgeSession {

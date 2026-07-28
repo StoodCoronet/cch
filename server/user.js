@@ -214,6 +214,21 @@ function scrollToBottom() {
     m.scrollTop = m.scrollHeight;
 }
 
+var COLLAPSE_THRESHOLD = 10; // lines before collapsing
+
+function collapseLongContent(html) {
+    var lines = html.split(/\n/);
+    if (lines.length <= COLLAPSE_THRESHOLD) return html;
+
+    var visible = lines.slice(0, 5).join("\n");
+    var hiddenCount = lines.length - 5;
+    var id = "collapse-" + Math.random().toString(36).slice(2, 9);
+
+    return visible +
+        '<div class="content-collapsed" id="' + id + '" style="display:none">' + "\n" + lines.slice(5).join("\n") + '</div>' +
+        '<div class="collapse-toggle" onclick="var el=document.getElementById(\'' + id + '\');var show=el.style.display===\'none\';el.style.display=show?\'block\':\'none\';this.textContent=show?\'▾ collapse\':\'… +' + hiddenCount + ' lines (click to expand)\'">… +' + hiddenCount + ' lines (click to expand)</div>';
+}
+
 function formatContent(text) {
     var codeBlocks = [];
     var html = esc(text);
@@ -248,6 +263,11 @@ function formatContent(text) {
     html = html.replace(/\x00CODEBLOCK_(\d+)\x00/g, function(_, i) {
         return codeBlocks[parseInt(i, 10)];
     });
+
+    // Collapse long plain-text content (not code blocks)
+    if (html.indexOf("code-block") === -1) {
+        html = collapseLongContent(html);
+    }
 
     return html;
 }

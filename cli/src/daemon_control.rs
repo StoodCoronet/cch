@@ -142,6 +142,51 @@ fn truncate_for_display(s: &str, max_len: usize) -> String {
     }
 }
 
+/// Extract metadata from a Claude Code JSONL message for server storage.
+/// Includes usage tokens, thinking content, and structured tool calls.
+fn extract_message_metadata(msg: &serde_json::Value) -> serde_json::Value {
+    let mut metadata = serde_json::json!({});
+
+    // Usage tokens (only on assistant messages)
+    if let Some(usage) = msg["message"]["usage"].as_object() {
+        let input = usage["input_tokens"].as_u64().unwrap_or(0)
+            + usage["cache_creation_input_tokens"].as_u64().unwrap_or(0)
+            + usage["cache_read_input_tokens"].as_u64().unwrap_or(0);
+        let output = usage["output_tokens"].as_u64().unwrap_or(0);
+        metadata["tokens"] = serde_json::json!({
+            "input": input,
+            "output": output,
+        });
+    }
+
+    // Thinking content
+    if let Some(content) = msg["message"]["content"].as_array() {
+        for block in content {
+            if block["type"].as_str() == Some("thinking") {
+                if let Some(thinking) = block["thinking"].as_str() {
+                    metadata["thinking"] = serde_json::Value::String(thinking.to_string());
+                }
+            }
+        }
+    }
+
+    // Structured tool calls from toolUseResult
+    if let Some(tool_result) = msg["toolUseResult"].as_object() {
+        let mut tool_calls = Vec::new();
+        if let Some(name) = tool_result["name"].as_str() {
+            tool_calls.push(serde_json::json!({
+                "name": name,
+                "result": tool_result["content"].as_str().unwrap_or(""),
+            }));
+        }
+        if !tool_calls.is_empty() {
+            metadata["toolCalls"] = serde_json::Value::Array(tool_calls);
+        }
+    }
+
+    metadata
+}
+
 fn report_session_lazy(server: &str, auth: &str, cwd: &str, hostname: &str) -> Result<String> {
     let client = reqwest::blocking::Client::builder().no_proxy().build().unwrap();
     let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
@@ -163,9 +208,9 @@ fn sync_jsonl(server: &str, auth: &str, track_dir: &std::path::Path) {
     let claude_dir = dirs::home_dir().unwrap_or_default().join(".claude").join("projects");
     let client = reqwest::blocking::Client::builder().no_proxy().build().unwrap();
 
-    let latest_track = std::fs::read_dir(&track_dir).into_iter().flatten()
+    let latest_track = std::fs::read_dir(track_dir).into_iter().flatten()
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map_or(false, |e| e == "json"))
+        .filter(|e| e.path().extension().is_some_and(|e| e == "json"))
         .max_by_key(|e| e.metadata().ok().and_then(|m| m.created().ok()).unwrap_or(std::time::UNIX_EPOCH));
 
     let entry = match latest_track { Some(e) => e, None => return };
@@ -175,32 +220,17 @@ fn sync_jsonl(server: &str, auth: &str, track_dir: &std::path::Path) {
         Some(v) => v, None => return
     };
     let session_id = track["sessionId"].as_str().unwrap_or("");
+    let claude_session_id = track["claudeSessionId"].as_str().unwrap_or("");
     let cwd = track["cwd"].as_str().unwrap_or("");
     if cwd.is_empty() { return; }
 
-    // Lazy session creation: only report to server when the first message arrives
-    let session_id = if session_id.is_empty() {
-        match report_session_lazy(server, auth, cwd, &track["hostname"].as_str().unwrap_or("")) {
-            Ok(id) => {
-                // Update tracking file with the new sessionId
-                let mut new_track = track.clone();
-                new_track["sessionId"] = serde_json::Value::String(id.clone());
-                let _ = fs::write(&path, new_track.to_string());
-                id
-            }
-            Err(e) => { eprintln!("daemon: lazy session report failed: {e}"); return; }
-        }
-    } else {
-        session_id.to_string()
-    };
-
     {
-        let proj_name = cwd.replace('/', "-").replace('_', "-");
+        let proj_name = cwd.replace(['/', '_'], "-");
         let proj_path = claude_dir.join(&proj_name);
         let mut jsonls: Vec<_> = match std::fs::read_dir(&proj_path) {
             Ok(entries) => entries
                 .filter_map(|e| e.ok())
-                .filter(|e| e.path().extension().map_or(false, |e| e == "jsonl"))
+                .filter(|e| e.path().extension().is_some_and(|e| e == "jsonl"))
                 .collect(),
             Err(e) => { eprintln!("daemon: read_dir error: {e}"); return }
         };
@@ -208,12 +238,24 @@ fn sync_jsonl(server: &str, auth: &str, track_dir: &std::path::Path) {
         jsonls.retain(|e| std::fs::metadata(e.path()).ok().and_then(|m| m.modified().ok()).unwrap_or(std::time::UNIX_EPOCH) >= track_created);
         jsonls.sort_by_key(|e| std::fs::metadata(e.path()).ok().and_then(|m| m.modified().ok()).unwrap_or(std::time::UNIX_EPOCH));
         jsonls.reverse();
-        let jsonl = match jsonls.first() {
-            Some(j) => j.path(),
+
+        // Find the JSONL file that belongs to our claude session
+        let jsonl = if !claude_session_id.is_empty() {
+            jsonls.iter()
+                .find(|e| e.file_name().to_string_lossy().starts_with(claude_session_id))
+                .map(|e| e.path())
+        } else {
+            None
+        };
+        let jsonl = jsonl.or_else(|| jsonls.first().map(|e| e.path()));
+        let jsonl = match jsonl {
+            Some(j) => j,
             None => { eprintln!("daemon: no JSONL in {:?}", claude_dir.join(&proj_name)); return }
         };
         eprintln!("daemon: syncing {}", jsonl.display());
 
+        // Discover claude sessionId from the JSONL file if we don't have it yet
+        let mut effective_claude_id = claude_session_id.to_string();
         let offset: u64 = fs::read_to_string(&offset_path).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0);
         if let Ok(meta) = jsonl.metadata() {
             let size = meta.len();
@@ -222,13 +264,46 @@ fn sync_jsonl(server: &str, auth: &str, track_dir: &std::path::Path) {
                     for line in content[offset as usize..].split(|&b| b == b'\n') {
                         if line.is_empty() { continue; }
                         if let Ok(msg) = serde_json::from_slice::<serde_json::Value>(line) {
+                            // Capture claude sessionId from the first message
+                            if effective_claude_id.is_empty() {
+                                if let Some(sid) = msg["sessionId"].as_str() {
+                                    effective_claude_id = sid.to_string();
+                                    let mut new_track = track.clone();
+                                    new_track["claudeSessionId"] = serde_json::Value::String(effective_claude_id.clone());
+                                    let _ = fs::write(&path, new_track.to_string());
+                                }
+                            }
+
                             let role = msg["type"].as_str().unwrap_or("");
+                            // Skip meta/compact messages
+                            if msg["isMeta"].as_bool().unwrap_or(false) { continue; }
+                            if msg["isCompactSummary"].as_bool().unwrap_or(false) { continue; }
+                            // Only sync messages belonging to this claude session
+                            if msg["sessionId"].as_str().unwrap_or("") != effective_claude_id { continue; }
+
                             let text = extract_message_text(&msg);
                             if !text.is_empty() && (role == "user" || role == "assistant") {
+                                // Lazy server session creation on first message
+                                let server_session_id = if session_id.is_empty() {
+                                    match report_session_lazy(server, auth, cwd, track["hostname"].as_str().unwrap_or("")) {
+                                        Ok(id) => {
+                                            let mut new_track = track.clone();
+                                            new_track["sessionId"] = serde_json::Value::String(id.clone());
+                                            new_track["claudeSessionId"] = serde_json::Value::String(effective_claude_id.clone());
+                                            let _ = fs::write(&path, new_track.to_string());
+                                            id
+                                        }
+                                        Err(e) => { eprintln!("daemon: lazy session report failed: {e}"); continue; }
+                                    }
+                                } else {
+                                    session_id.to_string()
+                                };
+
+                                let metadata = extract_message_metadata(&msg);
                                 let _ = client
-                                    .post(format!("{server}/v1/sessions/{session_id}/plaintext-messages"))
+                                    .post(format!("{server}/v1/sessions/{server_session_id}/plaintext-messages"))
                                     .header("Authorization", format!("Bearer {auth}"))
-                                    .json(&json!({ "role": role, "content": text })).send();
+                                    .json(&json!({ "role": role, "content": text, "metadata": metadata })).send();
                             }
                         }
                     }
