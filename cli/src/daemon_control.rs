@@ -187,10 +187,14 @@ fn extract_message_metadata(msg: &serde_json::Value) -> serde_json::Value {
     metadata
 }
 
-fn report_session_lazy(server: &str, auth: &str, cwd: &str, hostname: &str) -> Result<String> {
+pub fn report_session_lazy(server: &str, auth: &str, cwd: &str, hostname: &str, claude_session_id: &str) -> Result<String> {
     let client = reqwest::blocking::Client::builder().no_proxy().build().unwrap();
-    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
-    let tag = format!("{}-{}", cwd.replace('/', "-").trim_start_matches('-'), ts);
+    let tag = if claude_session_id.is_empty() {
+        let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        format!("{}-{}", cwd.replace('/', "-").trim_start_matches('-'), ts)
+    } else {
+        format!("{}--{}", cwd.replace('/', "-").trim_start_matches('-'), claude_session_id)
+    };
     let resp = client
         .post(format!("{server}/v1/sessions"))
         .header("Authorization", format!("Bearer {auth}"))
@@ -285,7 +289,7 @@ fn sync_jsonl(server: &str, auth: &str, track_dir: &std::path::Path) {
                             if !text.is_empty() && (role == "user" || role == "assistant") {
                                 // Lazy server session creation on first message
                                 let server_session_id = if session_id.is_empty() {
-                                    match report_session_lazy(server, auth, cwd, track["hostname"].as_str().unwrap_or("")) {
+                                    match report_session_lazy(server, auth, cwd, track["hostname"].as_str().unwrap_or(""), &effective_claude_id) {
                                         Ok(id) => {
                                             let mut new_track = track.clone();
                                             new_track["sessionId"] = serde_json::Value::String(id.clone());

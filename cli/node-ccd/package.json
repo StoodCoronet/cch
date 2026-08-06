@@ -1,0 +1,23 @@
+{
+  "name": "ccd",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.220",
+    "@anthropic-ai/claude-code": "^2.1.220",
+    "@iarna/toml": "^2.2.5",
+    "axios": "^1.19.0",
+    "blessed": "^0.1.81",
+    "readline-sync": "^1.4.10",
+    "socket.io-client": "^4.8.3",
+    "toml": "^5.0.0"
+  }
+}

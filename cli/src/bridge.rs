@@ -1,7 +1,8 @@
 //! ccd bridge — bidirectional message pump between webui and claude code.
-//! Spawns `claude -p -c` per webui message and forwards the response back to the server.
+//! Holds a persistent ClaudeProcess per session and forwards messages via stream-json.
 
 use anyhow::{Context, Result};
+use crate::claude_process::ClaudeProcess;
 use crate::config;
 use serde_json::json;
 use std::process::Command;
@@ -43,6 +44,7 @@ fn get_or_bootstrap_auth(hc: &config::HappyConfig) -> Result<String> {
 
 struct BridgeSession {
     session_id: String,
+    claude_session_id: String,
     cwd: String,
     profile_name: String,
     last_message_id: String,
@@ -57,6 +59,7 @@ fn load_latest_session() -> Option<BridgeSession> {
     let track: serde_json::Value = serde_json::from_str(&fs::read_to_string(latest.path()).ok()?).ok()?;
     Some(BridgeSession {
         session_id: track["sessionId"].as_str()?.to_string(),
+        claude_session_id: track["claudeSessionId"].as_str().unwrap_or("").to_string(),
         cwd: track["cwd"].as_str()?.to_string(),
         profile_name: track["profile"].as_str().unwrap_or("").to_string(),
         last_message_id: String::new(),
@@ -77,11 +80,11 @@ fn fetch_new_messages(server: &str, auth: &str, session_id: &str, after: &str) -
     Ok(data["messages"].as_array().cloned().unwrap_or_default())
 }
 
-fn post_message(server: &str, auth: &str, session_id: &str, role: &str, content: &str) -> Result<()> {
+fn post_message(server: &str, auth: &str, session_id: &str, role: &str, content: &str, metadata: &serde_json::Value) -> Result<()> {
     let client = reqwest::blocking::Client::builder().no_proxy().build().unwrap();
     client.post(format!("{server}/v1/sessions/{session_id}/plaintext-messages"))
         .header("Authorization", format!("Bearer {auth}"))
-        .json(&json!({ "role": role, "content": content }))
+        .json(&json!({ "role": role, "content": content, "metadata": metadata }))
         .timeout(Duration::from_secs(10))
         .send()
         .context("post message failed")?;
@@ -95,65 +98,51 @@ fn send_activity(server: &str, auth: &str, session_id: &str) {
         .timeout(Duration::from_secs(3)).send();
 }
 
-fn load_profile_env(profile_name: &str) -> std::collections::HashMap<String, String> {
-    let mut env_map = std::collections::HashMap::new();
-    if let Ok(profiles) = config::load_profiles() {
-        // Prefer exact match by name; fall back to first profile if none found
-        let target = profiles.iter().find(|p| p.name.eq_ignore_ascii_case(profile_name));
-        let fallback = profiles.first();
-        let profile = target.or(fallback);
-        if let Some(p) = profile {
-            if let Some(env) = &p.env {
-                for (k, v) in env {
-                    env_map.insert(k.clone(), v.clone());
-                }
-            }
-        }
-    }
-    env_map
-}
-
-fn ask_claude(cwd: &str, prompt: &str, profile_env: &std::collections::HashMap<String, String>) -> Result<String> {
-    let mut cmd = Command::new("claude");
-    cmd.args(["-p", "-c", prompt])
-        .current_dir(cwd);
-
-    // Inject profile env vars (ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL, etc.)
-    for (k, v) in profile_env {
-        cmd.env(k, v);
-    }
-
-    let output = cmd.output().context("failed to spawn claude")?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("claude exited with {}: {}", output.status, stderr);
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+fn load_profile(profile_name: &str) -> Option<config::Profile> {
+    config::load_profiles().ok()?.into_iter().find(|p| p.name.eq_ignore_ascii_case(profile_name))
 }
 
 pub async fn run_bridge() -> Result<()> {
     let hc = config::load_happy_config().context("Not connected. Run 'ccd connect <url>' first.")?;
     let auth = get_or_bootstrap_auth(&hc)?;
 
-    // Wait for an active session to appear (user may start claude after bridge)
+    // Wait for an active session to appear
     let session = loop {
         match load_latest_session() {
             Some(s) => break s,
             None => {
-                eprintln!("ccd bridge: waiting for session... (start claude with 'cch run' or TUI)");
+                eprintln!("ccd bridge: waiting for session...");
                 time::sleep(Duration::from_secs(3)).await;
             }
         }
     };
 
-    println!("ccd bridge: session={} cwd={}", session.session_id, session.cwd);
+    println!("ccd bridge: session={} claude={} cwd={}", session.session_id, session.claude_session_id, session.cwd);
 
     let server = hc.server.clone();
     let auth_tok = auth.clone();
     let session_id = session.session_id.clone();
+    let claude_session_id = session.claude_session_id.clone();
     let cwd = session.cwd.clone();
+    let profile_name = session.profile_name.clone();
     let mut last_id = session.last_message_id.clone();
-    let profile_env = load_profile_env(&session.profile_name);
+
+    // Load profile for spawning claude
+    let profile = load_profile(&profile_name).context("Profile not found")?;
+
+    // Spawn persistent claude process with stream-json
+    let resume_id = if claude_session_id.is_empty() { None } else { Some(claude_session_id.as_str()) };
+    let mut claude = ClaudeProcess::spawn(&profile, &cwd, resume_id)?;
+
+    // Capture session_id from init event
+    if claude.session_id.is_empty() {
+        if let Ok(Some(event)) = claude.read_event() {
+            if let crate::claude_process::ClaudeEvent::Init { session_id: sid } = event {
+                claude.session_id = sid;
+            }
+        }
+    }
+    eprintln!("ccd bridge: claude session_id={}", claude.session_id);
 
     let mut poll_tick = time::interval(Duration::from_secs(2));
     let mut activity_tick = time::interval(Duration::from_secs(30));
@@ -161,47 +150,88 @@ pub async fn run_bridge() -> Result<()> {
     loop {
         tokio::select! {
             _ = poll_tick.tick() => {
+                if session_id.is_empty() { continue; }
                 let srv = server.clone();
                 let tok = auth_tok.clone();
                 let sid = session_id.clone();
-                let cwd2 = cwd.clone();
                 let last = last_id.clone();
-                let penv = profile_env.clone();
                 let result = tokio::task::spawn_blocking(move || {
-                    let messages = fetch_new_messages(&srv, &tok, &sid, &last)?;
-                    let mut latest = last;
-                    for msg in messages {
-                        let id = msg["id"].as_str().unwrap_or("").to_string();
-                        let content = msg["content"].as_str().unwrap_or("");
-                        if id.is_empty() || content.is_empty() { continue; }
-                        eprintln!("ccd bridge: webui → claude: {}", &content[..content.len().min(80)]);
-                        match ask_claude(&cwd2, content, &penv) {
-                            Ok(reply) => {
-                                if let Err(e) = post_message(&srv, &tok, &sid, "assistant", &reply) {
-                                    eprintln!("ccd bridge: post assistant failed: {e}");
-                                }
-                            }
-                            Err(e) => {
-                                eprintln!("ccd bridge: claude error: {e}");
-                                let _ = post_message(&srv, &tok, &sid, "assistant", &format!("[error] {e}"));
-                            }
-                        }
-                        latest = id;
-                    }
-                    Ok::<_, anyhow::Error>(latest)
+                    fetch_new_messages(&srv, &tok, &sid, &last)
                 }).await;
                 match result {
-                    Ok(Ok(new_last)) => last_id = new_last,
-                    Ok(Err(e)) => eprintln!("ccd bridge: poll error: {e}"),
+                    Ok(Ok(messages)) => {
+                        for msg in messages {
+                            let id = msg["id"].as_str().unwrap_or("").to_string();
+                            let content = msg["content"].as_str().unwrap_or("");
+                            if id.is_empty() || content.is_empty() { continue; }
+                            eprintln!("ccd bridge: webui → claude: {}", &content[..content.len().min(80)]);
+
+                            // Send to claude via stream-json
+                            if let Err(e) = claude.send_message(content) {
+                                eprintln!("ccd bridge: send to claude failed: {e}");
+                                let srv2 = server.clone();
+                                let tok2 = auth_tok.clone();
+                                let sid2 = session_id.clone();
+                                let _ = post_message(&srv2, &tok2, &sid2, "assistant", &format!("[error] {e}"), &json!({}));
+                                continue;
+                            }
+
+                            // Read response
+                            match claude.read_response() {
+                                Ok(Some((text, metadata))) => {
+                                    let srv2 = server.clone();
+                                    let tok2 = auth_tok.clone();
+                                    let sid2 = session_id.clone();
+                                    if let Err(e) = post_message(&srv2, &tok2, &sid2, "assistant", &text, &metadata) {
+                                        eprintln!("ccd bridge: post assistant failed: {e}");
+                                    }
+                                }
+                                Ok(None) => {
+                                    eprintln!("ccd bridge: claude EOF");
+                                    let srv2 = server.clone();
+                                    let tok2 = auth_tok.clone();
+                                    let sid2 = session_id.clone();
+                                    let _ = post_message(&srv2, &tok2, &sid2, "assistant", "[error] claude exited", &json!({}));
+                                    break;
+                                }
+                                Err(e) => {
+                                    eprintln!("ccd bridge: claude read error: {e}");
+                                    let srv2 = server.clone();
+                                    let tok2 = auth_tok.clone();
+                                    let sid2 = session_id.clone();
+                                    let _ = post_message(&srv2, &tok2, &sid2, "assistant", &format!("[error] {e}"), &json!({}));
+                                }
+                            }
+                            last_id = id;
+                        }
+                    }
+                    Ok(Err(e)) => eprintln!("ccd bridge: fetch error: {e}"),
                     Err(e) => eprintln!("ccd bridge: task error: {e}"),
                 }
             }
             _ = activity_tick.tick() => {
-                let srv = server.clone();
-                let tok = auth_tok.clone();
-                let sid = session_id.clone();
-                tokio::task::spawn_blocking(move || send_activity(&srv, &tok, &sid)).await.ok();
+                if !session_id.is_empty() {
+                    let srv = server.clone();
+                    let tok = auth_tok.clone();
+                    let sid = session_id.clone();
+                    tokio::task::spawn_blocking(move || send_activity(&srv, &tok, &sid)).await.ok();
+                }
+            }
+        }
+
+        if !claude.is_running() {
+            eprintln!("ccd bridge: claude exited, restarting...");
+            // Restart with --resume
+            let resume_id = if claude.session_id.is_empty() { None } else { Some(claude.session_id.as_str()) };
+            match ClaudeProcess::spawn(&profile, &cwd, resume_id) {
+                Ok(p) => claude = p,
+                Err(e) => {
+                    eprintln!("ccd bridge: restart failed: {e}");
+                    break;
+                }
             }
         }
     }
+
+    Ok(())
 }

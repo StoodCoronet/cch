@@ -1,5 +1,6 @@
 pub mod app;
 pub mod bridge;
+pub mod claude_process;
 pub mod cli;
 pub mod config;
 pub mod daemon_control;

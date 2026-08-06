@@ -1,0 +1,73 @@
+# CCH Web 控制台 + node-ccd 需求对齐 Spec（定稿）
+
+> 访谈日期：2026-08-06。本文档是与用户对齐后的开发依据。
+
+## 1. 目标（Goals）
+
+- 单位是 **conversation**：与 claude code `/resume` 可恢复的会话一一对应（`~/.claude/projects/<path>/<sessionId>.jsonl` 的 sessionId 为唯一键）。
+- web 控制台能**实时看到** host 上 node-ccd 启动的 claude conversation，并能**远程控制**它干活：注入 query、授予工具权限。
+- web 上下达的控制实时作用到 host 的 claude 会话；claude 的最新输出实时回到 web。
+- 本地体验保留：node-ccd 本地打开 TUI 选 API profile，用选中的 key 启动 claude code；离开 host 后 web 继续接管同一会话。
+- web 会话显示名：被 `/rename` 过的用 rename 结果；否则用首条用户消息摘要 + 设备名。
+
+## 2. 非目标（Non-goals，本轮不做）
+
+- 多会话并发管理 UI（架构预留，本轮单会话链路打磨）。
+- web 远程冷启动（指定 cwd + profile + resume id 唤醒历史会话）——下轮做，本轮 daemon 协议预留命令通道。
+- 验证器 / 两步验证等高级安全机制。
+- Rust ccd 的继续投入（infra 方向转向 node-ccd，rust ccd 维持现状）。
+
+## 3. 架构决策（含理由）
+
+| 决策 | 结论 | 理由 |
+|------|------|------|
+| 渲染路线 | **xterm.js 真终端**，会话详情页 = 全屏终端 + 状态栏，废弃消息列表视图 | 复刻度 100%（/resume 菜单、ctrl+o、权限提示），远程控制 = 远程键盘，双向天然一致 |
+| 控制通道 | node-ccd 用 **PTY** 启动 claude；web 按键经 server 中继写入 PTY stdin | 唯一能让"本地 TUI 和 web 看到同一个画面"的方案；权限批准等交互零额外开发 |
+| 进程形态 | **daemon + 每会话子进程**：`ccd start` 常驻 daemon（连 server）；`ccd` 默认进 TUI 选 API，选完让 daemon spawn claude PTY 并 attach 本地终端；`ccd stop/status/edit/connect` | web 冷启动需要常驻接收方；子进程崩溃不拖 daemon |
+| 本地 TUI 退出 | **detach 保留**，子进程留在 daemon，可重新 attach，web 不断线 | "离开 host 后 web 继续用"的前提 |
+| 断线语义 | web 显示离线标记；恢复后自动重连续传 | 用户明确要求 |
+| 安全 | 本轮：server 用户+密码登录；connect 用 token。远程控制风险（≈远程执行命令）接受现状，加强版以后做 | 用户拍板 |
+| Session 创建 | 不再启动即建空 session；跟随 claude sessionId，有真实内容才出现在列表 | 解决 0 msgs 空会话占位 |
+
+## 4. 组件改动（真实文件路径）
+
+### node-ccd（`cli/node-ccd/`）
+- `daemon.js`（新）：常驻进程。Socket.IO 连 server；管理会话子进程表（sessionId → {pty, cwd, profile, claudeSessionId, title}）；接收 server 下发的 `term-input` 写入对应 PTY；把 PTY 输出推给 server。
+- `session.js`（新）：spawn claude PTY 子进程（注入 profile 的 env：`ANTHROPIC_API_KEY`/`ANTHROPIC_BASE_URL` 等）；watch `~/.claude/projects/<cwd-slug>/<sessionId>.jsonl` 提取 sessionId、title（/rename）、首条消息摘要。
+- `index.js`（改）：命令分发——无参= TUI 选 profile 后请求 daemon 开会话并 attach；`connect`/`edit`/`start`/`stop`/`status`。
+- `tui.js`（改）：保持与 rust ccd 一致的交互（Tab/1/2/3、↑↓/jk 不循环、Enter 启动）。
+- IPC：daemon 监听 `~/.ccd/daemon.sock`（unix socket），CLI 命令与其通信。
+
+### server（`server/`）
+- `sources/app/api/socket/`：新增终端中继 namespace/handler——`term-join`(sessionId)、`term-input`(data)、`term-output`(data)、`term-resize`(cols,rows)；host 侧标记 `clientType: 'machine'`，web 侧按账号鉴权。
+- `sources/app/api/routes/sessionRoutes.ts`：session 记录增加 `claudeSessionId`、`title`、`cwd`、`deviceName`、`online` 字段（无迁移权限，优先存 metadata JSON）。
+- `server/user.html` / `server/user.js`：会话详情页替换为 xterm.js（CDN 引入 `xterm` + `xterm-addon-fit`）；sidebar 保留会话列表（显示 title + 设备名 + 在线点）。
+
+### wire（`packages/wire/`）
+- 终端中继消息的 zod schema（如需要类型化）。
+
+## 5. 数据/控制流
+
+```
+web (xterm.js) ──term-input──▶ server ──▶ node-ccd daemon ──▶ PTY stdin ──▶ claude
+web (xterm.js) ◀─term-output── server ◀── node-ccd daemon ◀── PTY stdout ◀─┘
+```
+
+- 鉴权：web 端 socket auth = 账号 token；daemon 端 = connect token（现有 bootstrap）。
+- 离线：daemon 断开 → server 标记该设备会话 offline，web 状态栏显示；重连后 daemon 重发会话清单，web 重新 join。
+
+## 6.  Rollout 步骤
+
+1. node-ccd daemon + PTY 会话子进程（本地可跑通 TUI→claude）。
+2. server 终端中继 + web xterm.js 会话页。
+3. sessionId/title 对齐与命名规则。
+4. 离线标记 + 自动重连。
+5. 端到端自测脚本（起 server、起 daemon、模拟 web 按键、断言回显）。
+
+## 7. 开放风险
+
+- **node-pty 原生模块**：需编译（macOS OK）；若环境问题可用 `child_process` + `script(1)` 兜底。
+- **claude `/rename` 的持久化位置**未验证：需调研 title 存在 jsonl 还是别处；拿不到就只用首条消息摘要。
+- **多端同时输入**：本地 TUI 和 web 同时打字会互相穿插（同一 PTY），接受此行为（和多人共用 tmux 一样）。
+- **PT Y 尺寸**：web 端 resize 与本地终端尺寸不一致时以最后 resize 者为准。
+- 参考项目 `reference/claw-code` 的 UI 借鉴结论待探索后补充。

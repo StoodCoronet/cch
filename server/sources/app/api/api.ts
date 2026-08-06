@@ -8,6 +8,7 @@ import { pushRoutes } from "./routes/pushRoutes";
 import { sessionRoutes } from "./routes/sessionRoutes";
 import { connectRoutes } from "./routes/connectRoutes";
 import { accountRoutes } from "./routes/accountRoutes";
+import { eventRoutes } from "./routes/eventRoutes";
 import { startSocket } from "./socket";
 import { machinesRoutes } from "./routes/machinesRoutes";
 import { devRoutes } from "./routes/devRoutes";
@@ -106,6 +107,7 @@ export async function startApi(opts: StartApiOptions = {}) {
     v3SessionRoutes(typed);
     attachmentRoutes(typed);
     adminRoutes(typed);
+    eventRoutes(typed);
 
     // Static webapp (self-host mode)
     if (opts.staticDir) {

@@ -54,6 +54,16 @@ export type UpdateEvent = {
         updatedAt: number;
     }
 } | {
+    type: 'plaintext-message';
+    sessionId: string;
+    message: {
+        id: string;
+        role: string;
+        content: string;
+        metadata: any;
+        createdAt: number;
+    }
+} | {
     type: 'new-session';
     sessionId: string;
     seq: number;

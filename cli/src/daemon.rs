@@ -50,13 +50,13 @@ fn run_tui() -> Result<()> {
                     (KeyCode::Up, _)|(KeyCode::Char('k'), _) => app.prev(),
                     (KeyCode::Enter, _) if !app.profiles.is_empty() => {
                         cct::launch::restore_terminal();
-                        // Spawn bridge in background before exec replaces this process
-                        let exe = env::current_exe()?;
-                        let _ = Command::new(&exe).arg("bridge")
-                            .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
-                            .spawn()?;
-                        let err = cct::launch::exec_claude_ccd(&app.profiles[app.selected], false);
-                        eprintln!("Error: {err:#}"); std::process::exit(1);
+                        let profile = &app.profiles[app.selected];
+                        let rt = tokio::runtime::Runtime::new().unwrap();
+                        if let Err(e) = rt.block_on(run_interactive(profile)) {
+                            eprintln!("Error: {e:#}");
+                            std::process::exit(1);
+                        }
+                        return Ok(());
                     }
                     _ => {}
                 },
@@ -64,6 +64,127 @@ fn run_tui() -> Result<()> {
             }
         }
     }
+}
+
+/// Run claude with spawn-based pipes and bridge bidirectional sync.
+/// This is the interactive mode for ccd: spawns claude as a child process,
+/// holds stdin/stdout pipes, and forwards webui messages to claude.
+async fn run_interactive(profile: &cct::config::Profile) -> Result<()> {
+    use cct::claude_process::ClaudeProcess;
+    use cct::daemon_control;
+
+    let hc = cct::config::load_happy_config().context("Not connected. Run 'ccd connect <url>' first.")?;
+    let auth = daemon_control::get_or_bootstrap_auth(&hc)?;
+    let cwd = env::current_dir().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+    let hostname = daemon_control::hostname();
+
+    // Report machine
+    let client = reqwest::blocking::Client::builder().no_proxy().build().unwrap();
+    let _ = client.post(format!("{}/v1/machines/{hostname}/heartbeat", hc.server))
+        .header("Authorization", format!("Bearer {auth}"))
+        .timeout(std::time::Duration::from_secs(5)).send();
+
+    // Spawn claude with pipes
+    let cwd = env::current_dir().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+    let mut claude = ClaudeProcess::spawn(profile, &cwd, None)?;
+    println!("ccd: claude spawned, starting interactive bridge...");
+
+    // Create server session lazily on first message
+    let mut server_session_id = String::new();
+    let mut last_message_id = String::new();
+
+    let server = hc.server.clone();
+    let auth_tok = auth.clone();
+    let mut poll_tick = tokio::time::interval(std::time::Duration::from_secs(2));
+    let mut activity_tick = tokio::time::interval(std::time::Duration::from_secs(30));
+
+    loop {
+        tokio::select! {
+            _ = poll_tick.tick() => {
+                if server_session_id.is_empty() {
+                    // Wait for first user message to create session
+                    continue;
+                }
+                let srv = server.clone();
+                let tok = auth_tok.clone();
+                let sid = server_session_id.clone();
+                let last = last_message_id.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    let url = format!("{srv}/v1/sessions/{sid}/plaintext-messages?role=user&limit=50");
+                    let url = if last.is_empty() { url } else { format!("{url}&after={last}") };
+                    let client = reqwest::blocking::Client::builder().no_proxy().build().unwrap();
+                    let resp = client.get(&url)
+                        .header("Authorization", format!("Bearer {tok}"))
+                        .timeout(std::time::Duration::from_secs(10))
+                        .send()?;
+                    let data: serde_json::Value = resp.json()?;
+                    Ok::<_, anyhow::Error>(data["messages"].as_array().cloned().unwrap_or_default())
+                }).await;
+                match result {
+                    Ok(Ok(messages)) => {
+                        for msg in messages {
+                            let id = msg["id"].as_str().unwrap_or("").to_string();
+                            let content = msg["content"].as_str().unwrap_or("");
+                            if id.is_empty() || content.is_empty() { continue; }
+                            eprintln!("ccd: webui → claude: {}", &content[..content.len().min(80)]);
+                            if let Err(e) = claude.send_message(content) {
+                                eprintln!("ccd: send to claude failed: {e}");
+                            }
+                            last_message_id = id;
+                        }
+                    }
+                    Ok(Err(e)) => eprintln!("ccd: fetch messages error: {e}"),
+                    Err(e) => eprintln!("ccd: task error: {e}"),
+                }
+            }
+            _ = activity_tick.tick() => {
+                if !server_session_id.is_empty() {
+                    let srv = server.clone();
+                    let tok = auth_tok.clone();
+                    let sid = server_session_id.clone();
+                    tokio::task::spawn_blocking(move || {
+                        let client = reqwest::blocking::Client::builder().no_proxy().build().unwrap();
+                        let _ = client.post(format!("{srv}/v1/sessions/{sid}/activity"))
+                            .header("Authorization", format!("Bearer {tok}"))
+                            .timeout(std::time::Duration::from_secs(3)).send();
+                    }).await.ok();
+                }
+            }
+        }
+
+        // Read claude response and post to server
+        if let Ok(Some((text, metadata))) = claude.read_response() {
+            if !text.trim().is_empty() {
+                eprintln!("ccd: claude → server: {}", &text[..text.len().min(80)]);
+                if server_session_id.is_empty() {
+                    // Create session on first message
+                    match daemon_control::report_session_lazy(&server, &auth_tok, &cwd, &hostname, &claude.session_id) {
+                        Ok(id) => server_session_id = id,
+                        Err(e) => { eprintln!("ccd: session report failed: {e}"); continue; }
+                    }
+                }
+                let srv = server.clone();
+                let tok = auth_tok.clone();
+                let sid = server_session_id.clone();
+                let resp = text.clone();
+                let meta = metadata.clone();
+                tokio::task::spawn_blocking(move || {
+                    let client = reqwest::blocking::Client::builder().no_proxy().build().unwrap();
+                    let _ = client.post(format!("{srv}/v1/sessions/{sid}/plaintext-messages"))
+                        .header("Authorization", format!("Bearer {tok}"))
+                        .json(&serde_json::json!({ "role": "assistant", "content": resp, "metadata": meta }))
+                        .timeout(std::time::Duration::from_secs(10)).send();
+                }).await.ok();
+            }
+        }
+
+        if !claude.is_running() {
+            eprintln!("ccd: claude exited");
+            break;
+        }
+    }
+
+    Ok(())
 }
 
 fn main() {

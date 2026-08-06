@@ -6,6 +6,7 @@ var currentSessionId = null;
 var currentSession = null;
 var allSessions = [];
 var refreshTimer = null;
+var socket = null;
 var $ = function(id) { return document.getElementById(id); };
 
 function applyTheme() {
@@ -146,6 +147,7 @@ function renderSessions(sessions) {
                 '<span>' + (s.msgCount || 0) + ' msgs</span>' +
                 '<span>·</span>' +
                 '<span>' + ago(s.activeAt) + '</span>' +
+                '<button class="delete-btn" onclick="deleteSession(\'' + s.id.replace(/'/g, "\\'") + '\', event)">×</button>' +
             '</div>';
         el.onclick = function() { selectSession(s); closeSidebar(); };
         div.appendChild(el);
@@ -170,7 +172,6 @@ function loadMachines() {
 function selectSession(s) {
     currentSessionId = s.id;
     currentSession = s;
-    if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = setInterval(refresh, 2000); }
     renderSessions(allSessions);
     $("placeholder").classList.add("hidden");
     $("messages").classList.remove("hidden");
@@ -179,6 +180,21 @@ function selectSession(s) {
     $("chat-meta").textContent = "Created " + fmt(s.createdAt) + (s.machineName && s.machineName !== s.tag ? " · " + esc(s.machineName) : "");
     $("messages-inner").innerHTML = '<div class="empty">Loading messages...</div>';
     loadMessages();
+}
+
+function deleteSession(id, event) {
+    if (event) { event.stopPropagation(); event.preventDefault(); }
+    if (!confirm("Delete this session? It will reappear if the host restarts claude.")) return;
+    api("DELETE", "/v1/sessions/" + id).then(function() {
+        if (currentSessionId === id) {
+            currentSessionId = null;
+            currentSession = null;
+            $("messages").classList.add("hidden");
+            $("input-area").classList.add("hidden");
+            $("placeholder").classList.remove("hidden");
+        }
+        loadSessions();
+    }).catch(function(e) { alert(e.message); });
 }
 
 function updateInputVisibility(s) {
@@ -292,12 +308,15 @@ function appendMessageToDOM(role, content, autoScroll, createdAt, metadata) {
     var msg = document.createElement("div");
     msg.className = "message " + role;
     var prompt = role === "user" ? "❯" : "⏺";
+    if (role === "tool_use" || role === "tool_result") {
+        prompt = "⏺";
+    }
     msg.innerHTML =
         '<div class="message-prompt">' + prompt + '</div>' +
         '<div class="message-content">' + formatContent(content) + '</div>';
     container.appendChild(msg);
 
-    // Tool calls
+    // Tool calls (for all message types, not just assistant)
     if (metadata && metadata.toolCalls && metadata.toolCalls.length) {
         metadata.toolCalls.forEach(function(tc) {
             container.appendChild(renderToolCall(tc));
@@ -507,7 +526,46 @@ function connect() {
 function showDashboard() {
     $("connect-screen").style.display = "none";
     loadSessions(); loadMachines(); loadTokens();
-    refreshTimer = setInterval(refresh, currentSessionId ? 2000 : 30000);
+    initSocket();
+    refreshTimer = setInterval(refresh, 30000);
+}
+
+function initSocket() {
+    if (socket) return;
+    console.log('Initializing Socket.IO with token:', TOKEN ? 'present' : 'missing');
+    socket = io(SERVER, {
+        path: '/v1/updates',
+        auth: { token: TOKEN, clientType: 'user-scoped' },
+        transports: ['websocket', 'polling'],
+    });
+
+    socket.on('connect', function() {
+        console.log('Socket.IO connected');
+    });
+
+    socket.on('connect_error', function(err) {
+        console.error('Socket.IO connect error:', err);
+    });
+
+    socket.on('update', function(payload) {
+        console.log('Socket.IO update received:', payload);
+        if (!payload.body || payload.body.t !== 'plaintext-message') {
+            console.log('Not a plaintext-message, skipping');
+            return;
+        }
+        if (payload.body.sid !== currentSessionId) {
+            console.log('SessionId mismatch:', payload.body.sid, 'vs', currentSessionId);
+            return;
+        }
+        var msg = payload.body.message;
+        console.log('Appending message:', msg);
+        appendMessageToDOM(msg.role, msg.content, true, msg.createdAt, msg.metadata);
+        scrollToBottom();
+    });
+
+    socket.on('disconnect', function() {
+        console.log('Socket.IO disconnected');
+    });
 }
 
 function logout() {
@@ -523,7 +581,6 @@ function refresh() {
     if (currentSessionId) {
         var current = allSessions.find(function(s) { return s.id === currentSessionId; });
         if (current) updateInputVisibility(current);
-        loadMessages();
     }
 }
 
@@ -555,7 +612,8 @@ function loadTokens() {
                 actions +=
                     '<button onclick="copyText(\'' + conn.replace(/'/g, "\\'") + '\')">Copy link</button>' +
                     '<button onclick="copyText(copyForCch(\'' + conn.replace(/'/g, "\\'") + '\'))">cch</button>' +
-                    '<button onclick="copyText(copyForCcd(\'' + conn.replace(/'/g, "\\'") + '\'))">ccd</button>';
+                    '<button onclick="copyText(copyForCcd(\'' + conn.replace(/'/g, "\\'") + '\'))">ccd</button>' +
+                    '<button onclick="copyText(copyForNode(\'' + conn.replace(/'/g, "\\'") + '\'))">node</button>';
             }
             actions += '<button class="revoke" onclick="revokeToken(\'' + t.id.replace(/'/g, "\\'") + '\')">Revoke</button>';
             row.innerHTML =
@@ -611,6 +669,9 @@ function copyForCch(conn) {
 function copyForCcd(conn) {
     return "./target/release/ccd connect " + terminalQuote(conn);
 }
+function copyForNode(conn) {
+    return "node index.js connect " + terminalQuote(conn) + " && node index.js";
+}
 
 // Events
 $("connect-btn").onclick = connect;
@@ -623,6 +684,7 @@ $("gen-tk-btn").onclick = generateToken;
 $("tk-label").onkeydown = function(e) { if (e.key === "Enter") generateToken(); };
 $("copy-cch-btn").onclick = function() { copyText(copyForCch($("new-conn").textContent)); };
 $("copy-ccd-btn").onclick = function() { copyText(copyForCcd($("new-conn").textContent)); };
+$("copy-node-btn").onclick = function() { copyText(copyForNode($("new-conn").textContent)); };
 $("copy-url-btn").onclick = function() { copyText($("new-conn").textContent); };
 
 var ut = new URLSearchParams(window.location.search).get("token");

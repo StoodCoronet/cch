@@ -471,6 +471,30 @@ export function sessionRoutes(app: Fastify) {
                 metadata: request.body.metadata || undefined,
             },
         });
+
+        // Realtime push to user-scoped connections (webui + ccd bridge)
+        const updSeq = await allocateUserSeq(request.userId);
+        eventRouter.emitUpdate({
+            userId: request.userId,
+            payload: {
+                id: randomKeyNaked(12),
+                seq: updSeq,
+                body: {
+                    t: 'plaintext-message',
+                    sid: request.params.sessionId,
+                    message: {
+                        id: msg.id,
+                        role: msg.role,
+                        content: msg.content,
+                        metadata: msg.metadata || null,
+                        createdAt: msg.createdAt.getTime(),
+                    },
+                },
+                createdAt: Date.now(),
+            },
+            recipientFilter: { type: 'user-scoped-only' },
+        });
+
         return reply.send({ id: msg.id });
     });
 
