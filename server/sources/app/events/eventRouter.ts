@@ -203,6 +203,22 @@ export type EphemeralEvent = {
     title: string;
     body: string;
     timestamp: number;
+} | {
+    type: 'terminal-state';
+    sessionId: string;
+    state: 'running' | 'exited' | 'offline';
+    exitCode?: number;
+    timestamp: number;
+} | {
+    type: 'terminal-meta';
+    sessionId: string;
+    meta: {
+        claudeSessionId?: string;
+        title?: string;
+        cwd?: string;
+        deviceName?: string;
+    };
+    timestamp: number;
 };
 
 // === EVENT PAYLOAD TYPES ===
@@ -541,6 +557,37 @@ export function buildMachineStatusEphemeral(machineId: string, online: boolean):
         type: 'machine-status',
         machineId,
         online,
+        timestamp: Date.now()
+    };
+}
+
+/**
+ * Terminal relay (node-ccd PTY) lifecycle state for a session. Broadcast to
+ * user-scoped connections so the web sidebar can show live terminal status.
+ */
+export function buildTerminalStateEphemeral(sessionId: string, state: 'running' | 'exited' | 'offline', exitCode?: number): EphemeralPayload {
+    return {
+        type: 'terminal-state',
+        sessionId,
+        state,
+        exitCode,
+        timestamp: Date.now()
+    };
+}
+
+/**
+ * Terminal relay metadata (title, cwd, bound Claude session, device name).
+ */
+export function buildTerminalMetaEphemeral(sessionId: string, meta: {
+    claudeSessionId?: string;
+    title?: string;
+    cwd?: string;
+    deviceName?: string;
+}): EphemeralPayload {
+    return {
+        type: 'terminal-meta',
+        sessionId,
+        meta,
         timestamp: Date.now()
     };
 }

@@ -16,6 +16,7 @@
     "@iarna/toml": "^2.2.5",
     "axios": "^1.19.0",
     "blessed": "^0.1.81",
+    "node-pty": "^1.1.0",
     "readline-sync": "^1.4.10",
     "socket.io-client": "^4.8.3",
     "toml": "^5.0.0"

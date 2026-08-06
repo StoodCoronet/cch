@@ -7,6 +7,14 @@ var currentSession = null;
 var allSessions = [];
 var refreshTimer = null;
 var socket = null;
+
+// Terminal view state
+var term = null;            // xterm Terminal instance for the current session
+var termFit = null;         // FitAddon instance
+var termRO = null;          // ResizeObserver on the terminal container
+var termResizeTimer = null; // debounce timer for fit/resize
+var termState = null;       // running | exited | offline
+var sessionMeta = {};       // sessionId -> {title, deviceName, cwd, claudeSessionId} from term:join / term:meta
 var $ = function(id) { return document.getElementById(id); };
 
 function applyTheme() {
@@ -137,13 +145,16 @@ function renderSessions(sessions) {
     filtered.forEach(function(s) {
         var el = document.createElement("div");
         el.className = "session-item" + (s.id === currentSessionId ? " selected" : "");
-        var title = (s.tag || s.id.slice(0, 10)).replace(/[&<>]/g, "");
+        var meta = sessionMeta[s.id] || {};
+        var title = (meta.title || s.tag || s.id.slice(0, 10)).replace(/[&<>]/g, "");
+        var device = meta.deviceName || s.machineName || "";
         el.innerHTML =
             '<div class="title">' +
                 '<span class="dot ' + (s.active ? "active" : "idle") + '"></span>' +
                 esc(title) +
             '</div>' +
             '<div class="meta">' +
+                (device ? '<span>' + esc(device) + '</span><span>·</span>' : '') +
                 '<span>' + (s.msgCount || 0) + ' msgs</span>' +
                 '<span>·</span>' +
                 '<span>' + ago(s.activeAt) + '</span>' +
@@ -170,16 +181,19 @@ function loadMachines() {
 }
 
 function selectSession(s) {
+    if (currentSessionId && currentSessionId !== s.id && socket) {
+        socket.emit("term:leave", { sessionId: currentSessionId });
+    }
     currentSessionId = s.id;
     currentSession = s;
     renderSessions(allSessions);
     $("placeholder").classList.add("hidden");
-    $("messages").classList.remove("hidden");
-    updateInputVisibility(s);
-    $("chat-title").textContent = esc(s.tag || s.id.slice(0, 12));
-    $("chat-meta").textContent = "Created " + fmt(s.createdAt) + (s.machineName && s.machineName !== s.tag ? " · " + esc(s.machineName) : "");
-    $("messages-inner").innerHTML = '<div class="empty">Loading messages...</div>';
-    loadMessages();
+    $("term-wrap").classList.remove("hidden");
+    $("term-reconnect-btn").classList.remove("hidden");
+    disposeTerminal();
+    updateTermHeader();
+    setTermState(null);
+    joinTerminal(s.id);
 }
 
 function deleteSession(id, event) {
@@ -187,273 +201,135 @@ function deleteSession(id, event) {
     if (!confirm("Delete this session? It will reappear if the host restarts claude.")) return;
     api("DELETE", "/v1/sessions/" + id).then(function() {
         if (currentSessionId === id) {
+            if (socket) socket.emit("term:leave", { sessionId: id });
+            disposeTerminal();
             currentSessionId = null;
             currentSession = null;
-            $("messages").classList.add("hidden");
-            $("input-area").classList.add("hidden");
+            $("term-wrap").classList.add("hidden");
+            $("term-reconnect-btn").classList.add("hidden");
+            $("term-title").textContent = "Select a session";
+            $("term-device").textContent = "";
+            setTermState(null);
             $("placeholder").classList.remove("hidden");
         }
         loadSessions();
     }).catch(function(e) { alert(e.message); });
 }
 
-function updateInputVisibility(s) {
-    if (!s) {
-        $("input-area").classList.add("hidden");
-        return;
+// ===== Terminal view (xterm.js over Socket.IO relay) =====
+
+var XTERM_THEME = {
+    background: "#0d0d0d",
+    foreground: "#e6e6e6",
+    cursor: "#aeafad",
+    cursorAccent: "#0d0d0d",
+    selectionBackground: "#3a3d41",
+    black: "#000000", red: "#cd3131", green: "#0dbc79", yellow: "#e5e510",
+    blue: "#2472c8", magenta: "#bc3fbc", cyan: "#11a8cd", white: "#e5e5e5",
+    brightBlack: "#666666", brightRed: "#f14c4c", brightGreen: "#23d18b",
+    brightYellow: "#f5f543", brightBlue: "#3b8eea", brightMagenta: "#d670d6",
+    brightCyan: "#29b8db", brightWhite: "#ffffff"
+};
+
+function setTermState(state, exitCode) {
+    termState = state;
+    var dot = $("term-dot");
+    dot.className = "term-dot" + (state ? " " + state : " hidden");
+    var txt = $("term-state-text");
+    if (state === "exited") {
+        txt.textContent = "session exited" + (exitCode != null ? " (code " + exitCode + ")" : "") + " — input disabled";
+    } else if (state === "offline") {
+        txt.textContent = "device offline — input disabled";
+    } else {
+        txt.textContent = "";
     }
-    // Show input when the session already has plaintext messages, or when it is a ccd-tracked session
-    var show = s.isPlaintext || (s.msgCount && s.msgCount > 0);
-    $("input-area").classList.toggle("hidden", !show);
 }
 
-function loadMessages() {
-    if (!currentSessionId) return;
-    api("GET", "/v1/sessions/" + currentSessionId + "/plaintext-messages").then(function(data) {
-        var container = $("messages-inner");
-        var messages = data.messages || [];
-        if (messages.length === 0) {
-            container.innerHTML = '<div class="empty">No messages yet.</div>';
+function updateTermHeader() {
+    if (!currentSession) return;
+    var meta = sessionMeta[currentSessionId] || {};
+    $("term-title").textContent = meta.title || currentSession.tag || currentSession.id.slice(0, 12);
+    $("term-device").textContent = meta.deviceName || currentSession.machineName || "";
+}
+
+function applySessionMeta(sessionId, meta) {
+    if (!meta) return;
+    var merged = sessionMeta[sessionId] || {};
+    for (var k in meta) merged[k] = meta[k];
+    sessionMeta[sessionId] = merged;
+    if (sessionId === currentSessionId) updateTermHeader();
+    renderSessions(allSessions);
+}
+
+function disposeTerminal() {
+    if (termRO) { termRO.disconnect(); termRO = null; }
+    if (termResizeTimer) { clearTimeout(termResizeTimer); termResizeTimer = null; }
+    if (term) { term.dispose(); term = null; }
+    termFit = null;
+    termState = null;
+}
+
+function scheduleTermFit() {
+    if (termResizeTimer) clearTimeout(termResizeTimer);
+    termResizeTimer = setTimeout(function() {
+        termResizeTimer = null;
+        if (!term || !termFit || !currentSessionId) return;
+        try { termFit.fit(); } catch (e) { return; }
+        if (socket) {
+            socket.emit("term:resize", { sessionId: currentSessionId, cols: term.cols, rows: term.rows });
+        }
+    }, 200);
+}
+
+function joinTerminal(sessionId) {
+    if (!socket) return;
+    socket.emit("term:join", { sessionId: sessionId }, function(ack) {
+        // The user may have switched sessions while the join was in flight
+        if (sessionId !== currentSessionId) {
+            socket.emit("term:leave", { sessionId: sessionId });
             return;
         }
-        container.innerHTML = "";
-        messages.forEach(function(m) { appendMessageToDOM(m.role, m.content, false, m.createdAt, m.metadata); });
-        scrollToBottom();
-    }).catch(function(e) {
-        $("messages-inner").innerHTML = '<div class="empty">Cannot load messages.</div>';
-        console.error(e);
-    });
-}
-
-function scrollToBottom() {
-    var m = $("messages");
-    m.scrollTop = m.scrollHeight;
-}
-
-var COLLAPSE_THRESHOLD = 10; // lines before collapsing
-
-function collapseLongContent(html) {
-    var lines = html.split(/\n/);
-    if (lines.length <= COLLAPSE_THRESHOLD) return html;
-
-    var visible = lines.slice(0, 5).join("\n");
-    var hiddenCount = lines.length - 5;
-    var id = "collapse-" + Math.random().toString(36).slice(2, 9);
-
-    return visible +
-        '<div class="content-collapsed" id="' + id + '" style="display:none">' + "\n" + lines.slice(5).join("\n") + '</div>' +
-        '<div class="collapse-toggle" onclick="var el=document.getElementById(\'' + id + '\');var show=el.style.display===\'none\';el.style.display=show?\'block\':\'none\';this.textContent=show?\'▾ collapse\':\'… +' + hiddenCount + ' lines (click to expand)\'">… +' + hiddenCount + ' lines (click to expand)</div>';
-}
-
-function formatContent(text) {
-    var codeBlocks = [];
-    var html = esc(text);
-
-    // Extract code blocks first so paragraph splitting doesn't break them
-    html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, function(_, lang, code) {
-        var placeholder = "\x00CODEBLOCK_" + codeBlocks.length + "\x00";
-        var label = lang ? lang : "code";
-        var top = "╭─ " + label;
-        var bottom = "╰─";
-        codeBlocks.push(
-            '<div class="code-block">' +
-                '<div class="code-block-border">' + esc(top) + '</div>' +
-                '<pre><button class="copy-code">Copy</button><code>' + esc(code.trim()) + '</code></pre>' +
-                '<div class="code-block-border">' + esc(bottom) + '</div>' +
-            '</div>'
-        );
-        return placeholder;
-    });
-
-    // Inline code
-    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-
-    // Paragraphs
-    var parts = html.split(/\n\n+/);
-    html = parts.map(function(p) {
-        if (p.indexOf("\x00CODEBLOCK_") !== -1) return p;
-        return '<p>' + p.replace(/\n/g, "<br>") + '</p>';
-    }).join("");
-
-    // Restore code blocks
-    html = html.replace(/\x00CODEBLOCK_(\d+)\x00/g, function(_, i) {
-        return codeBlocks[parseInt(i, 10)];
-    });
-
-    // Collapse long plain-text content (not code blocks)
-    if (html.indexOf("code-block") === -1) {
-        html = collapseLongContent(html);
-    }
-
-    return html;
-}
-
-function appendMessageToDOM(role, content, autoScroll, createdAt, metadata) {
-    var container = $("messages-inner");
-    var empty = container.querySelector(".empty");
-    if (empty) empty.remove();
-
-    // Divider between messages (not before the first one)
-    if (container.querySelector(".message")) {
-        var divider = document.createElement("hr");
-        divider.className = "message-divider";
-        container.appendChild(divider);
-    }
-
-    // Thinking block (assistant only)
-    if (metadata && role === "assistant" && (metadata.thinking || metadata.thinkingMs)) {
-        container.appendChild(renderThinkingBlock(metadata));
-    }
-
-    var msg = document.createElement("div");
-    msg.className = "message " + role;
-    var prompt = role === "user" ? "❯" : "⏺";
-    if (role === "tool_use" || role === "tool_result") {
-        prompt = "⏺";
-    }
-    msg.innerHTML =
-        '<div class="message-prompt">' + prompt + '</div>' +
-        '<div class="message-content">' + formatContent(content) + '</div>';
-    container.appendChild(msg);
-
-    // Tool calls (for all message types, not just assistant)
-    if (metadata && metadata.toolCalls && metadata.toolCalls.length) {
-        metadata.toolCalls.forEach(function(tc) {
-            container.appendChild(renderToolCall(tc));
+        if (!ack || !ack.ok) {
+            $("term-state-text").textContent = (ack && ack.error) ? String(ack.error) : "failed to join terminal";
+            return;
+        }
+        disposeTerminal();
+        term = new Terminal({
+            cursorBlink: true,
+            fontSize: 13,
+            fontFamily: "Menlo, monospace",
+            theme: XTERM_THEME
         });
-    }
-
-    // Turn status (assistant only)
-    if (metadata && role === "assistant") {
-        var parts = [];
-        if (metadata.bakedMs) parts.push("Baked for " + formatDuration(metadata.bakedMs));
-        if (metadata.tokens) {
-            var t = metadata.tokens;
-            if (t.input || t.output) parts.push((t.input || 0) + "↑ " + (t.output || 0) + "↓");
-            if (t.cost) parts.push("$" + t.cost.toFixed(4));
+        termFit = new FitAddon.FitAddon();
+        term.loadAddon(termFit);
+        term.open($("term-container"));
+        try { termFit.fit(); } catch (e) {}
+        if (ack.scrollback) term.write(ack.scrollback);
+        if (ack.meta) applySessionMeta(sessionId, ack.meta);
+        setTermState(ack.state || "offline");
+        term.onData(function(data) {
+            if (termState !== "running" || sessionId !== currentSessionId || !socket) return;
+            socket.emit("term:input", { sessionId: sessionId, data: data });
+        });
+        termRO = new ResizeObserver(scheduleTermFit);
+        termRO.observe($("term-container"));
+        // Sync the initial size so the host PTY matches the web terminal
+        if (termState === "running") {
+            socket.emit("term:resize", { sessionId: sessionId, cols: term.cols, rows: term.rows });
         }
-        if (parts.length) {
-            var meta = document.createElement("div");
-            meta.className = "message-meta";
-            meta.textContent = "✻ " + parts.join(" · ");
-            container.appendChild(meta);
-        }
-    }
-
-    if (createdAt) {
-        var time = document.createElement("div");
-        time.className = "message-time";
-        time.textContent = fmt(createdAt);
-        container.appendChild(time);
-    }
-
-    msg.querySelectorAll(".copy-code").forEach(function(btn) {
-        btn.onclick = function() {
-            var code = this.nextElementSibling.textContent;
-            copyText(code).then(function() {
-                btn.textContent = "Copied!";
-                setTimeout(function() { btn.textContent = "Copy"; }, 2000);
-            });
-        };
     });
-    if (autoScroll) scrollToBottom();
 }
 
-function renderThinkingBlock(metadata) {
-    var wrap = document.createElement("div");
-    wrap.className = "thinking-block";
+$("term-reconnect-btn").onclick = function() {
+    if (!currentSessionId || !socket) return;
+    socket.emit("term:leave", { sessionId: currentSessionId });
+    disposeTerminal();
+    setTermState(null);
+    joinTerminal(currentSessionId);
+};
 
-    var header = document.createElement("div");
-    header.className = "thinking-toggle";
-    var label = "🦀 Thought for " + formatDuration(metadata.thinkingMs || 0);
-    if (metadata.thinking) {
-        label += " (click to expand)";
-    }
-    header.textContent = label;
-    wrap.appendChild(header);
+window.addEventListener("resize", scheduleTermFit);
 
-    if (metadata.thinking) {
-        var body = document.createElement("div");
-        body.className = "thinking-body hidden";
-        body.textContent = metadata.thinking;
-        wrap.appendChild(body);
-
-        header.onclick = function() {
-            body.classList.toggle("hidden");
-            header.textContent = "🦀 Thought for " + formatDuration(metadata.thinkingMs || 0) +
-                (body.classList.contains("hidden") ? " (click to expand)" : " (click to collapse)");
-        };
-    }
-
-    return wrap;
-}
-
-function renderToolCall(tc) {
-    var wrap = document.createElement("div");
-    wrap.className = "tool-call";
-
-    var border = "─".repeat(Math.max(tc.name.length + 8, 20));
-    var top = "╭─ " + tc.name + " ─╮";
-    var bottom = "╰" + border + "╯";
-
-    var argsText = "";
-    if (tc.args) {
-        try {
-            argsText = JSON.stringify(tc.args, null, 2);
-        } catch (e) {
-            argsText = String(tc.args);
-        }
-    }
-
-    var html = '<div class="tool-box-border">' + esc(top) + '</div>';
-    if (argsText) {
-        html += '<div class="tool-box-body">' + esc(argsText) + '</div>';
-    }
-    html += '<div class="tool-box-border">' + esc(bottom) + '</div>';
-
-    if (tc.result) {
-        var isErr = /error|fail|exception/i.test(tc.result);
-        var icon = isErr ? "✗" : "✓";
-        var cls = isErr ? "tool-result-err" : "tool-result-ok";
-        html += '<div class="' + cls + '">' + icon + " " + esc(tc.result) + '</div>';
-    }
-
-    wrap.innerHTML = html;
-    return wrap;
-}
-
-function formatDuration(ms) {
-    if (ms < 1000) return ms + "ms";
-    if (ms < 60000) return (ms / 1000).toFixed(1) + "s";
-    return Math.floor(ms / 60000) + "m " + Math.floor((ms % 60000) / 1000) + "s";
-}
-
-function sendMessage() {
-    var input = $("msg-input");
-    var text = input.value.trim();
-    if (!text || !currentSessionId) return;
-    input.value = "";
-    input.style.height = "auto";
-    $("send-btn").disabled = true;
-    appendMessageToDOM("user", text, true, Date.now(), null);
-    api("POST", "/v1/sessions/" + currentSessionId + "/plaintext-messages", { role: "user", content: text })
-        .then(function() { if (currentSessionId) loadMessages(); })
-        .catch(function(e) { console.error(e); });
-}
-
-// Textarea auto-resize
-$("msg-input").addEventListener("input", function() {
-    this.style.height = "auto";
-    this.style.height = Math.min(180, this.scrollHeight) + "px";
-    $("send-btn").disabled = !this.value.trim();
-});
-$("msg-input").addEventListener("keydown", function(e) {
-    if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        sendMessage();
-    }
-});
-$("send-btn").onclick = sendMessage;
 
 // Login tabs
 document.querySelectorAll(".connect-tab").forEach(function(tab) {
@@ -547,20 +423,22 @@ function initSocket() {
         console.error('Socket.IO connect error:', err);
     });
 
-    socket.on('update', function(payload) {
-        console.log('Socket.IO update received:', payload);
-        if (!payload.body || payload.body.t !== 'plaintext-message') {
-            console.log('Not a plaintext-message, skipping');
-            return;
-        }
-        if (payload.body.sid !== currentSessionId) {
-            console.log('SessionId mismatch:', payload.body.sid, 'vs', currentSessionId);
-            return;
-        }
-        var msg = payload.body.message;
-        console.log('Appending message:', msg);
-        appendMessageToDOM(msg.role, msg.content, true, msg.createdAt, msg.metadata);
-        scrollToBottom();
+    socket.on('term:output', function(msg) {
+        if (!msg || msg.sessionId !== currentSessionId || !term) return;
+        term.write(msg.data);
+    });
+
+    socket.on('term:state', function(msg) {
+        if (!msg || msg.sessionId !== currentSessionId) return;
+        setTermState(msg.state, msg.exitCode);
+        if (!term) return;
+        if (msg.state === 'offline') term.write("\r\n\x1b[90m[connection lost]\x1b[0m\r\n");
+        if (msg.state === 'exited') term.write("\r\n\x1b[90m[session exited]\x1b[0m\r\n");
+    });
+
+    socket.on('term:meta', function(msg) {
+        if (!msg || !msg.sessionId) return;
+        applySessionMeta(msg.sessionId, msg.meta);
     });
 
     socket.on('disconnect', function() {
@@ -571,6 +449,7 @@ function initSocket() {
 function logout() {
     ["cch_token", "cch_account_id"].forEach(function(k) { localStorage.removeItem(k); });
     TOKEN = ""; ACCOUNT_ID = ""; currentSessionId = null; currentSession = null; allSessions = [];
+    disposeTerminal();
     location.reload();
 }
 
@@ -578,10 +457,6 @@ function refresh() {
     loadSessions();
     loadMachines();
     loadTokens();
-    if (currentSessionId) {
-        var current = allSessions.find(function(s) { return s.id === currentSessionId; });
-        if (current) updateInputVisibility(current);
-    }
 }
 
 // Tokens

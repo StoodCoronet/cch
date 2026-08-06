@@ -1,0 +1,516 @@
+// ccd daemon: long-running process that owns all claude PTY sessions,
+// bridges them to the server over Socket.IO, and exposes a local IPC
+// (unix socket, newline-delimited JSON) for index.js / attach.js.
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const net = require('net');
+const util = require('util');
+const crypto = require('crypto');
+const { StringDecoder } = require('string_decoder');
+const io = require('socket.io-client');
+const axios = require('axios');
+const {
+    createPty,
+    getPtyBackendName,
+    JsonlWatcher,
+    getProjectDirName,
+    findLatestJsonl,
+} = require('./session');
+const { loadConfig, bootstrap, CONFIG_DIR, PID_FILE, LOG_FILE, SOCK_FILE } = require('./index');
+
+// --- Logging: everything goes to ~/.ccd/daemon.log, never stdout ---
+fs.mkdirSync(CONFIG_DIR, { recursive: true });
+const logStream = fs.createWriteStream(LOG_FILE, { flags: 'a' });
+function logLine(level, args) {
+    logStream.write(`${new Date().toISOString()} ${level} ${util.format(...args)}\n`);
+}
+console.log = (...args) => logLine('INFO', args);
+console.warn = (...args) => logLine('WARN', args);
+console.error = (...args) => logLine('ERROR', args);
+
+const CLAUDE_BIN = process.env.CCD_CLAUDE_BIN ||
+    path.join(__dirname, 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe');
+const SPAWN_SESSION_TIMEOUT_MS = 20000;
+
+const startedAt = Date.now();
+const sessions = new Map(); // sessionId -> session object
+
+let server = null;
+let authToken = null;
+let socket = null;
+const hostname = os.hostname();
+
+// --- Server session / message sync ---
+async function createServerSession(session) {
+    const tag = session.claudeSessionId
+        ? `${getProjectDirName(session.cwd)}-${session.claudeSessionId.slice(0, 8)}`
+        : getProjectDirName(session.cwd);
+    let lastErr = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+            const resp = await axios.post(`${server}/v1/sessions`, {
+                tag,
+                metadata: hostname,
+            }, {
+                headers: { Authorization: `Bearer ${authToken}` },
+                timeout: 10000,
+            });
+            return resp.data.session.id;
+        } catch (e) {
+            lastErr = e;
+            console.error(`createServerSession attempt ${attempt + 1} failed: ${e.message}`);
+            await new Promise(r => setTimeout(r, 2000));
+        }
+    }
+    throw lastErr;
+}
+
+async function postMessage(session, role, content, metadata = {}) {
+    if (!session.serverReady) {
+        session.pendingMessages.push({ role, content, metadata });
+        return;
+    }
+    try {
+        await axios.post(`${server}/v1/sessions/${session.sessionId}/plaintext-messages`, {
+            role, content, metadata,
+        }, {
+            headers: { Authorization: `Bearer ${authToken}` },
+            timeout: 10000,
+        });
+    } catch (e) {
+        console.error(`postMessage error (session ${session.sessionId}): ${e.message}`);
+    }
+}
+
+function sessionMeta(session) {
+    return {
+        claudeSessionId: session.claudeSessionId || null,
+        title: session.title || null,
+        cwd: session.cwd,
+        deviceName: hostname,
+    };
+}
+
+function emitTermRegister(session) {
+    if (!socket || !socket.connected || !session.serverReady) return;
+    socket.emit('term:register', {
+        sessionId: session.sessionId,
+        meta: sessionMeta(session),
+        cols: session.cols,
+        rows: session.rows,
+    });
+}
+
+function emitTermMeta(session) {
+    if (!socket || !socket.connected || !session.serverReady) return;
+    socket.emit('term:meta', { sessionId: session.sessionId, meta: sessionMeta(session) });
+}
+
+function emitTermState(session, state, exitCode) {
+    if (!socket || !socket.connected || !session.serverReady) return;
+    const payload = { sessionId: session.sessionId, state };
+    if (exitCode !== undefined) payload.exitCode = exitCode;
+    socket.emit('term:state', payload);
+}
+
+// Finalize a session once we know the claudeSessionId (from the jsonl
+// watcher, or immediately in resume mode): create the server session,
+// re-key the session table on the server CUID, register and flush buffers.
+async function finalizeServerSession(session) {
+    if (session.finalizing || session.serverReady) return;
+    session.finalizing = true;
+    try {
+        const sessionId = await createServerSession(session);
+        if (sessions.get(session.localId) === session) {
+            sessions.delete(session.localId);
+        }
+        session.sessionId = sessionId;
+        session.serverReady = true;
+        sessions.set(sessionId, session);
+        console.log(`session ready: ${sessionId} (claude=${session.claudeSessionId || 'unknown'}, profile=${session.profile.name})`);
+        emitTermRegister(session);
+        emitTermMeta(session);
+        // Flush buffered PTY output so early claude output reaches the server
+        if (session.pendingOutput) {
+            socket && socket.connected && socket.emit('term:output', { sessionId, data: session.pendingOutput });
+            session.pendingOutput = '';
+        }
+        const pending = session.pendingMessages.splice(0);
+        for (const m of pending) {
+            await postMessage(session, m.role, m.content, m.metadata);
+        }
+        if (session.spawnResolve) {
+            session.spawnResolve({ ok: true, sessionId });
+            session.spawnResolve = null;
+        }
+    } catch (e) {
+        console.error(`finalizeServerSession failed: ${e.message}`);
+        if (session.spawnResolve) {
+            session.spawnResolve({ ok: false, error: `failed to create server session: ${e.message}` });
+            session.spawnResolve = null;
+        }
+        killSession(session, 'server session creation failed');
+    } finally {
+        session.finalizing = false;
+    }
+}
+
+// --- Session lifecycle ---
+function spawnSession({ profile, cwd, cols, rows, resume }) {
+    const env = {
+        ...process.env,
+        ...(profile.env || {}),
+        ...(profile.model ? { ANTHROPIC_MODEL: profile.model } : {}),
+        ...(profile.base_url ? { ANTHROPIC_BASE_URL: profile.base_url } : {}),
+    };
+    // Resume mode: the claudeSessionId is the latest jsonl file name for this cwd
+    let resumeClaudeSessionId = null;
+    if (resume) {
+        const jsonlPath = findLatestJsonl(cwd);
+        if (jsonlPath) resumeClaudeSessionId = path.basename(jsonlPath, '.jsonl');
+    }
+    const claudeArgs = [];
+    if (profile.model) claudeArgs.push('--model', profile.model);
+    if (profile.skip_permissions) claudeArgs.push('--dangerously-skip-permissions');
+    if (resumeClaudeSessionId) claudeArgs.push('--resume', resumeClaudeSessionId);
+    if (profile.extra_args && profile.extra_args.length) claudeArgs.push(...profile.extra_args);
+
+    const localId = 'tmp-' + crypto.randomUUID();
+    const session = {
+        localId,
+        sessionId: null,
+        serverReady: false,
+        finalizing: false,
+        pty: null,
+        watcher: null,
+        cwd,
+        profile,
+        claudeSessionId: resumeClaudeSessionId,
+        title: null,
+        cols: cols || 80,
+        rows: rows || 24,
+        createdAt: Date.now(),
+        state: 'running',
+        exitCode: null,
+        attachSockets: new Set(),
+        pendingMessages: [],
+        pendingOutput: '',
+        spawnResolve: null,
+    };
+    sessions.set(localId, session);
+
+    const pty = createPty(CLAUDE_BIN, claudeArgs, { cwd, env, cols: session.cols, rows: session.rows });
+    session.pty = pty;
+
+    pty.onData((data) => {
+        for (const conn of session.attachSockets) {
+            try { conn.write(data); } catch (e) { /* ignore */ }
+        }
+        if (session.serverReady) {
+            if (socket && socket.connected) socket.emit('term:output', { sessionId: session.sessionId, data });
+        } else {
+            // Buffer early output (claude startup banner) until register; cap at 64KB
+            session.pendingOutput = (session.pendingOutput + data).slice(-65536);
+        }
+    });
+
+    pty.onExit((code) => {
+        session.state = 'exited';
+        session.exitCode = code;
+        if (session.watcher) session.watcher.stop();
+        console.log(`session exited: ${session.sessionId || session.localId} code=${code}`);
+        emitTermState(session, 'exited', code);
+        for (const conn of session.attachSockets) {
+            try { conn.write(`\r\n[ccd] session exited (code ${code})\r\n`); } catch (e) { /* ignore */ }
+            try { conn.end(); } catch (e) { /* ignore */ }
+        }
+        session.attachSockets.clear();
+        if (session.spawnResolve) {
+            session.spawnResolve({ ok: false, error: `claude exited immediately (code ${code})` });
+            session.spawnResolve = null;
+        }
+    });
+
+    const watcher = new JsonlWatcher(cwd, {
+        onClaudeSessionId: (id) => {
+            if (session.claudeSessionId === id) return;
+            session.claudeSessionId = id;
+            console.log(`claudeSessionId detected: ${id} (cwd=${cwd})`);
+            finalizeServerSession(session);
+            emitTermMeta(session);
+        },
+        onTitle: (title) => {
+            session.title = title;
+            emitTermMeta(session);
+        },
+        onMessage: (role, text, metadata) => {
+            postMessage(session, role, text, metadata);
+        },
+    });
+    session.watcher = watcher;
+    watcher.start();
+
+    if (resumeClaudeSessionId) {
+        // Resume mode: claudeSessionId known up front, create server session now
+        finalizeServerSession(session);
+    }
+
+    return session;
+}
+
+function killSession(session, reason) {
+    if (session.state === 'exited') return;
+    console.log(`killing session ${session.sessionId || session.localId}: ${reason || ''}`);
+    try { session.pty.kill(); } catch (e) { /* ignore */ }
+    if (session.watcher) session.watcher.stop();
+    session.state = 'exited';
+    emitTermState(session, 'exited');
+    for (const conn of session.attachSockets) {
+        try { conn.write(`\r\n[ccd] session killed\r\n`); } catch (e) { /* ignore */ }
+        try { conn.end(); } catch (e) { /* ignore */ }
+    }
+    session.attachSockets.clear();
+}
+
+function findSession(id) {
+    return sessions.get(id) || null;
+}
+
+// --- Socket.IO to server ---
+function connectServer() {
+    socket = io(server, {
+        path: '/v1/updates',
+        auth: { token: authToken, clientType: 'machine-scoped', machineId: hostname },
+        transports: ['websocket'],
+    });
+
+    socket.on('connect', () => {
+        console.log(`server connected (${server})`);
+        // Re-register all live sessions after (re)connect
+        for (const session of sessions.values()) {
+            if (session.serverReady) {
+                emitTermRegister(session);
+                emitTermMeta(session);
+                emitTermState(session, session.state, session.exitCode === null ? undefined : session.exitCode);
+            }
+        }
+    });
+
+    socket.on('disconnect', (reason) => {
+        console.log(`server disconnected: ${reason}`);
+    });
+
+    socket.on('connect_error', (e) => {
+        console.error(`server connect_error: ${e.message}`);
+    });
+
+    socket.on('term:input', (payload) => {
+        const session = payload && findSession(payload.sessionId);
+        if (!session || session.state === 'exited') return;
+        session.pty.write(String(payload.data));
+    });
+
+    socket.on('term:resize', (payload) => {
+        const session = payload && findSession(payload.sessionId);
+        if (!session || session.state === 'exited') return;
+        session.cols = payload.cols;
+        session.rows = payload.rows;
+        session.pty.resize(payload.cols, payload.rows);
+    });
+}
+
+// --- IPC (unix socket, newline-delimited JSON) ---
+async function handleCommand(conn, msg) {
+    switch (msg.cmd) {
+        case 'spawn': {
+            const { profile, cwd, cols, rows, resume } = msg;
+            if (!profile || !cwd) return { ok: false, error: 'spawn requires profile and cwd' };
+            const session = spawnSession({ profile, cwd, cols, rows, resume });
+            return new Promise((resolve) => {
+                session.spawnResolve = resolve;
+                // Wait for the jsonl watcher to reveal the claudeSessionId so the
+                // server session gets a proper tag; fall back to creating it
+                // without the id on timeout.
+                setTimeout(() => {
+                    if (session.spawnResolve && !session.serverReady && session.state !== 'exited') {
+                        console.warn(`spawn: timed out waiting for claudeSessionId (cwd=${cwd}), creating session without it`);
+                        finalizeServerSession(session);
+                    }
+                }, SPAWN_SESSION_TIMEOUT_MS);
+            });
+        }
+        case 'list': {
+            return {
+                ok: true,
+                sessions: [...sessions.values()]
+                    .filter(s => s.serverReady)
+                    .map(s => ({
+                        sessionId: s.sessionId,
+                        claudeSessionId: s.claudeSessionId,
+                        title: s.title,
+                        cwd: s.cwd,
+                        profile: s.profile.name,
+                        state: s.state,
+                        createdAt: s.createdAt,
+                    })),
+            };
+        }
+        case 'kill': {
+            const session = findSession(msg.sessionId);
+            if (!session) return { ok: false, error: 'session not found' };
+            killSession(session, 'ipc kill');
+            return { ok: true };
+        }
+        case 'status': {
+            return {
+                ok: true,
+                uptime: Math.floor((Date.now() - startedAt) / 1000),
+                sessionCount: sessions.size,
+                serverConnected: !!(socket && socket.connected),
+                ptyBackend: getPtyBackendName(),
+            };
+        }
+        case 'resize': {
+            const session = findSession(msg.sessionId);
+            if (!session) return { ok: false, error: 'session not found' };
+            if (session.state !== 'exited') {
+                session.cols = msg.cols;
+                session.rows = msg.rows;
+                session.pty.resize(msg.cols, msg.rows);
+            }
+            return { ok: true };
+        }
+        case 'attach': {
+            const session = findSession(msg.sessionId);
+            if (!session) return { ok: false, error: 'session not found' };
+            if (msg.cols && msg.rows && session.state !== 'exited') {
+                session.cols = msg.cols;
+                session.rows = msg.rows;
+                session.pty.resize(msg.cols, msg.rows);
+            }
+            // Mark the connection as attached: after the {ok} line the socket
+            // switches to raw byte stream mode (see handleConnection).
+            return { ok: true, _attach: session };
+        }
+        case 'shutdown': {
+            setTimeout(() => shutdown(0), 100);
+            return { ok: true };
+        }
+        default:
+            return { ok: false, error: `unknown command: ${msg.cmd}` };
+    }
+}
+
+function handleConnection(conn) {
+    let buffer = Buffer.alloc(0);
+    let attachedSession = null;
+    const decoder = new StringDecoder('utf8');
+
+    conn.on('data', (chunk) => {
+        if (attachedSession) {
+            // Raw mode: bytes go straight into the PTY stdin
+            attachedSession.pty.write(decoder.write(chunk));
+            return;
+        }
+        buffer = Buffer.concat([buffer, chunk]);
+        let idx;
+        while ((idx = buffer.indexOf(0x0a)) >= 0) {
+            const line = buffer.slice(0, idx).toString('utf-8').trim();
+            buffer = buffer.slice(idx + 1);
+            if (!line) continue;
+            let msg;
+            try {
+                msg = JSON.parse(line);
+            } catch (e) {
+                conn.write(JSON.stringify({ ok: false, error: 'invalid JSON' }) + '\n');
+                continue;
+            }
+            handleCommand(conn, msg).then((resp) => {
+                const attachSession = resp && resp._attach;
+                if (attachSession) delete resp._attach;
+                conn.write(JSON.stringify(resp) + '\n', () => {
+                    if (attachSession) {
+                        attachedSession = attachSession;
+                        attachedSession.attachSockets.add(conn);
+                        // Flush any leftover bytes after the header into the PTY
+                        if (buffer.length) {
+                            attachedSession.pty.write(decoder.write(buffer));
+                            buffer = Buffer.alloc(0);
+                        }
+                    }
+                });
+            }).catch((e) => {
+                console.error(`ipc command error: ${e.stack || e.message}`);
+                try { conn.write(JSON.stringify({ ok: false, error: e.message }) + '\n'); } catch (e2) { /* ignore */ }
+            });
+        }
+    });
+
+    conn.on('close', () => {
+        if (attachedSession) attachedSession.attachSockets.delete(conn);
+    });
+    conn.on('error', () => {
+        if (attachedSession) attachedSession.attachSockets.delete(conn);
+    });
+}
+
+function startIpc() {
+    try { fs.unlinkSync(SOCK_FILE); } catch (e) { /* ignore */ }
+    const srv = net.createServer(handleConnection);
+    srv.listen(SOCK_FILE);
+    srv.on('error', (e) => {
+        console.error(`ipc server error: ${e.message}`);
+        process.exit(1);
+    });
+    console.log(`ipc listening on ${SOCK_FILE}`);
+}
+
+// --- Shutdown ---
+function shutdown(code) {
+    console.log('daemon shutting down');
+    for (const session of sessions.values()) {
+        try { session.pty.kill(); } catch (e) { /* ignore */ }
+        if (session.watcher) session.watcher.stop();
+    }
+    if (socket) socket.disconnect();
+    try { fs.unlinkSync(PID_FILE); } catch (e) { /* ignore */ }
+    try { fs.unlinkSync(SOCK_FILE); } catch (e) { /* ignore */ }
+    process.exit(code);
+}
+
+// --- Main ---
+async function main() {
+    // Refuse to start twice
+    if (fs.existsSync(PID_FILE)) {
+        const pid = parseInt(fs.readFileSync(PID_FILE, 'utf-8').trim(), 10);
+        if (pid) {
+            try {
+                process.kill(pid, 0);
+                console.error(`daemon already running (pid ${pid})`);
+                process.exit(1);
+            } catch (e) {
+                // stale pid file, continue
+            }
+        }
+    }
+    fs.writeFileSync(PID_FILE, String(process.pid));
+
+    const config = loadConfig();
+    server = config.server;
+    authToken = await bootstrap(server, config.token, hostname);
+    console.log(`daemon started (pid ${process.pid}, pty backend: ${getPtyBackendName()})`);
+
+    connectServer();
+    startIpc();
+
+    process.on('SIGTERM', () => shutdown(0));
+    process.on('SIGINT', () => shutdown(0));
+    process.on('uncaughtException', (e) => console.error(`uncaughtException: ${e.stack || e.message}`));
+    process.on('unhandledRejection', (e) => console.error(`unhandledRejection: ${e && (e.stack || e.message) || e}`));
+}
+
+main().catch((e) => {
+    console.error(`fatal: ${e.stack || e.message}`);
+    process.exit(1);
+});

@@ -70,4 +70,4 @@ web (xterm.js) ◀─term-output── server ◀── node-ccd daemon ◀─�
 - **claude `/rename` 的持久化位置**未验证：需调研 title 存在 jsonl 还是别处；拿不到就只用首条消息摘要。
 - **多端同时输入**：本地 TUI 和 web 同时打字会互相穿插（同一 PTY），接受此行为（和多人共用 tmux 一样）。
 - **PT Y 尺寸**：web 端 resize 与本地终端尺寸不一致时以最后 resize 者为准。
-- 参考项目 `reference/claw-code` 的 UI 借鉴结论待探索后补充。
+- 参考项目 `reference/claw-code` 探索结论：它是 Rust 重写的 claude code CLI，对 PTY/Socket.IO/xterm.js 零覆盖；唯一可借鉴的是其单文件静态页的 CSS 变量暗色主题与 `textContent` 安全渲染习惯。远程终端部分需自行实现（类 gotty/ttyd 路线）。
