@@ -31,7 +31,6 @@ console.error = (...args) => logLine('ERROR', args);
 
 const CLAUDE_BIN = process.env.CCD_CLAUDE_BIN ||
     path.join(__dirname, 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe');
-const SPAWN_SESSION_TIMEOUT_MS = 20000;
 
 const startedAt = Date.now();
 const sessions = new Map(); // sessionId -> session object
@@ -43,9 +42,12 @@ const hostname = os.hostname();
 
 // --- Server session / message sync ---
 async function createServerSession(session) {
+    // Fresh spawns get a unique pending tag (two claude processes in the same
+    // cwd must not collide on the server, which dedupes sessions by tag).
+    // Once claude reveals its sessionId the tag is rewritten via PATCH.
     const tag = session.claudeSessionId
         ? `${getProjectDirName(session.cwd)}-${session.claudeSessionId.slice(0, 8)}`
-        : getProjectDirName(session.cwd);
+        : `${getProjectDirName(session.cwd)}-pending-${session.localId.slice(-8)}`;
     let lastErr = null;
     for (let attempt = 0; attempt < 3; attempt++) {
         try {
@@ -64,6 +66,21 @@ async function createServerSession(session) {
         }
     }
     throw lastErr;
+}
+
+// Rewrite the server session tag to include the claudeSessionId (fire-and-forget)
+async function updateServerTag(session) {
+    if (!session.serverReady || !session.claudeSessionId) return;
+    const tag = `${getProjectDirName(session.cwd)}-${session.claudeSessionId.slice(0, 8)}`;
+    try {
+        await axios.patch(`${server}/v1/sessions/${session.sessionId}/tag`, { tag }, {
+            headers: { Authorization: `Bearer ${authToken}` },
+            timeout: 10000,
+        });
+        console.log(`server tag aligned: ${tag}`);
+    } catch (e) {
+        console.error(`updateServerTag failed: ${e.message}`);
+    }
 }
 
 async function postMessage(session, role, content, metadata = {}) {
@@ -239,6 +256,11 @@ function spawnSession({ profile, cwd, cols, rows, resume }) {
             console.log(`claudeSessionId detected: ${id} (cwd=${cwd})`);
             finalizeServerSession(session);
             emitTermMeta(session);
+            // Align the server session tag with the claudeSessionId so a later
+            // --resume of this conversation lands on the same server session.
+            if (session.serverReady) {
+                updateServerTag(session);
+            }
         },
         onTitle: (title) => {
             session.title = title;
@@ -247,7 +269,7 @@ function spawnSession({ profile, cwd, cols, rows, resume }) {
         onMessage: (role, text, metadata) => {
             postMessage(session, role, text, metadata);
         },
-    });
+    }, { expectedId: resumeClaudeSessionId || null });
     session.watcher = watcher;
     watcher.start();
 
@@ -329,15 +351,11 @@ async function handleCommand(conn, msg) {
             const session = spawnSession({ profile, cwd, cols, rows, resume });
             return new Promise((resolve) => {
                 session.spawnResolve = resolve;
-                // Wait for the jsonl watcher to reveal the claudeSessionId so the
-                // server session gets a proper tag; fall back to creating it
-                // without the id on timeout.
-                setTimeout(() => {
-                    if (session.spawnResolve && !session.serverReady && session.state !== 'exited') {
-                        console.warn(`spawn: timed out waiting for claudeSessionId (cwd=${cwd}), creating session without it`);
-                        finalizeServerSession(session);
-                    }
-                }, SPAWN_SESSION_TIMEOUT_MS);
+                // Create the server session immediately: the PTY terminal is
+                // interactable from the web right away. The claudeSessionId only
+                // appears once claude writes its jsonl (first user message) and
+                // follows via term:meta.
+                finalizeServerSession(session);
             });
         }
         case 'list': {

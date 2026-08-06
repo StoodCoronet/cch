@@ -93,8 +93,10 @@ async function main() {
     });
     const outputs = [];
     const states = [];
+    const metas = [];
     socket.on('term:output', (m) => { if (m.sessionId === sessionId) outputs.push(m.data); });
     socket.on('term:state', (m) => { if (m.sessionId === sessionId) states.push(m.state); });
+    socket.on('term:meta', (m) => { if (m.sessionId === sessionId) metas.push(m.meta || {}); });
     await new Promise((resolve, reject) => {
         socket.on('connect', resolve);
         socket.on('connect_error', reject);
@@ -126,6 +128,11 @@ async function main() {
         const afterEcho = allOutput().length;
         const reply = await waitFor(() => allOutput().length > afterEcho + 20 ? true : null, 45000);
         check('claude response streams back', !!reply, reply ? `+${allOutput().length - afterEcho} chars` : 'no response within 45s');
+        // claude writes its jsonl on the first user message; the daemon then
+        // pushes term:meta with claudeSessionId + title (first-message excerpt)
+        const meta = await waitFor(() => metas.find(m => m.claudeSessionId), 15000);
+        check('term:meta carries claudeSessionId', !!meta,
+            meta ? `claude=${meta.claudeSessionId.slice(0, 8)} title=${JSON.stringify(meta.title || '')}` : `metas seen: ${metas.length}`);
     }
 
     // --- 5. resize ---

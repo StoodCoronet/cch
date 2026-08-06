@@ -68,11 +68,11 @@ function getProjectDirName(cwd) {
     return cwd.replace(/\//g, '-').replace(/_/g, '-');
 }
 
-function findLatestJsonl(cwd) {
+function findLatestJsonl(cwd, includeFile) {
     const projDir = path.join(getClaudeProjectsDir(), getProjectDirName(cwd));
     if (!fs.existsSync(projDir)) return null;
     const files = fs.readdirSync(projDir)
-        .filter(f => f.endsWith('.jsonl'))
+        .filter(f => f.endsWith('.jsonl') && (!includeFile || includeFile(f)))
         .map(f => ({ name: f, path: path.join(projDir, f), mtime: fs.statSync(path.join(projDir, f)).mtime }))
         .sort((a, b) => b.mtime - a.mtime);
     return files.length ? files[0].path : null;
@@ -104,11 +104,25 @@ function extractMessageText(msg) {
 //   onTitle(title)          — summary line or first user message excerpt
 //   onMessage(role, text, metadata) — each new user/assistant message
 class JsonlWatcher {
-    constructor(cwd, callbacks) {
+    constructor(cwd, callbacks, opts = {}) {
         this.cwd = cwd;
         this.onClaudeSessionId = callbacks.onClaudeSessionId || (() => {});
         this.onTitle = callbacks.onTitle || (() => {});
         this.onMessage = callbacks.onMessage || (() => {});
+        // Files that already existed when this watcher was created. A new claude
+        // conversation always writes a NEW jsonl file, so pre-existing files belong
+        // to older conversations and must not be mistaken for ours. The one exception
+        // is resume mode (expectedId): claude appends to that existing file.
+        this.expectedId = opts.expectedId || null;
+        this.preExisting = new Set();
+        try {
+            const projDir = path.join(getClaudeProjectsDir(), getProjectDirName(cwd));
+            if (fs.existsSync(projDir)) {
+                for (const f of fs.readdirSync(projDir)) {
+                    if (f.endsWith('.jsonl')) this.preExisting.add(f);
+                }
+            }
+        } catch (e) { /* ignore */ }
         this.lastJsonlPath = null;
         this.lastOffset = 0;
         this.timer = null;
@@ -133,7 +147,10 @@ class JsonlWatcher {
     }
 
     pollUnsafe() {
-        const jsonlPath = findLatestJsonl(this.cwd);
+        const jsonlPath = findLatestJsonl(this.cwd, (f) => {
+            if (this.expectedId) return f === `${this.expectedId}.jsonl`;
+            return !this.preExisting.has(f);
+        });
         if (!jsonlPath) return;
         if (jsonlPath !== this.lastJsonlPath) {
             this.lastJsonlPath = jsonlPath;

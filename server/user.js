@@ -417,6 +417,13 @@ function initSocket() {
 
     socket.on('connect', function() {
         console.log('Socket.IO connected');
+        // After a reconnect the server-side room membership is gone; re-join the
+        // open session and rebuild the terminal from the server scrollback.
+        if (currentSessionId) {
+            disposeTerminal();
+            setTermState(null);
+            joinTerminal(currentSessionId);
+        }
     });
 
     socket.on('connect_error', function(err) {

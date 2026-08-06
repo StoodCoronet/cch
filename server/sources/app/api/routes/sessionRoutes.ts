@@ -321,6 +321,42 @@ export function sessionRoutes(app: Fastify) {
         }
     });
 
+    // Update a session's tag (used by ccd daemon to align the tag with the
+    // claudeSessionId once claude reveals it after the first message)
+    app.patch('/v1/sessions/:sessionId/tag', {
+        schema: {
+            params: z.object({
+                sessionId: z.string()
+            }),
+            body: z.object({
+                tag: z.string().min(1)
+            })
+        },
+        preHandler: app.authenticate
+    }, async (request, reply) => {
+        const userId = request.userId;
+        const { sessionId } = request.params;
+        const { tag } = request.body;
+
+        const session = await db.session.findFirst({
+            where: { id: sessionId, accountId: userId }
+        });
+        if (!session) {
+            return reply.code(404).send({ error: 'Session not found' });
+        }
+        const conflict = await db.session.findFirst({
+            where: { accountId: userId, tag, id: { not: sessionId } }
+        });
+        if (conflict) {
+            return reply.code(409).send({ error: 'Tag already in use', sessionId: conflict.id });
+        }
+        await db.session.update({
+            where: { id: sessionId },
+            data: { tag }
+        });
+        return reply.send({ ok: true });
+    });
+
     app.get('/v1/sessions/:sessionId/messages', {
         schema: {
             params: z.object({
