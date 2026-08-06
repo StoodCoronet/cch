@@ -66,8 +66,21 @@ web (xterm.js) ◀─term-output── server ◀── node-ccd daemon ◀─�
 
 ## 7. 开放风险
 
-- **node-pty 原生模块**：需编译（macOS OK）；若环境问题可用 `child_process` + `script(1)` 兜底。
-- **claude `/rename` 的持久化位置**未验证：需调研 title 存在 jsonl 还是别处；拿不到就只用首条消息摘要。
+- **node-pty 原生模块**：macOS 预编译二进制安装成功（agent 已验证）；`script -q /dev/null` 兜底已写未实测，且为 macOS/BSD 语法，Linux 不兼容。
+- **claude `/rename` 的持久化位置**未验证：jsonl 里有 `type:'summary'` 行会用作 title；否则用首条用户消息前 60 字符。
 - **多端同时输入**：本地 TUI 和 web 同时打字会互相穿插（同一 PTY），接受此行为（和多人共用 tmux 一样）。
-- **PT Y 尺寸**：web 端 resize 与本地终端尺寸不一致时以最后 resize 者为准。
-- 参考项目 `reference/claw-code` 探索结论：它是 Rust 重写的 claude code CLI，对 PTY/Socket.IO/xterm.js 零覆盖；唯一可借鉴的是其单文件静态页的 CSS 变量暗色主题与 `textContent` 安全渲染习惯。远程终端部分需自行实现（类 gotty/ttyd 路线）。
+- **PTY 尺寸**：web 端 resize 与本地终端尺寸不一致时以最后 resize 者为准。
+- **`/clear` 或 TUI 内 `/resume` 换会话**：daemon 只更新 meta.claudeSessionId 并 PATCH tag，不新建 server session（同一块终端屏幕继续）。如需严格按 conversation 切分 server session，下轮处理。
+- **daemon 重启不恢复会话**：PTY 子进程随 daemon 退出，会话表在内存中；web 上看到 offline/exited，需重新 spawn 或 resume。
+- **多副本部署**：终端中继的 input/resize 转发只查本进程 socket（standalone OK）；Redis adapter 多副本时会丢，需 sticky 或跨进程转发。
+
+## 8. 实施状态（2026-08-06 下午）
+
+已全部落地并通过 e2e（`cli/node-ccd/test-e2e.js`，10/10；含离线广播场景 8/8）：
+
+- node-ccd daemon 架构：`daemon.js` / `session.js` / `attach.js` / 重写 `index.js`（connect/start/stop/status/ls/attach/spawn + 默认 TUI 流程），node-pty 后端。
+- server `terminalHandler.ts`：term:register/output/state/meta、term:join/input/resize、256KB 滚动缓冲回放、daemon 断线广播 offline。
+- web 会话页 = xterm.js 终端（状态栏 + 在线点 + 重连按钮），断线重连自动 rejoin 并回放 scrollback。
+- session 身份：spawn 即建 server session（pending tag 防同 cwd 冲突）；首条消息后 watcher 发现 claudeSessionId → term:meta + PATCH tag 对齐（`server/sources/app/api/routes/sessionRoutes.ts` 新增 PATCH `/v1/sessions/:id/tag`）。
+- 本地开发 DB 从 PGlite 切到外部 Postgres（PGlite 数据目录损坏无法修复）：`server/.env.dev` 现 `DB_PROVIDER=postgres` + `DATABASE_URL`，容器 `cch-pg`（postgres:16, 数据卷 `server/.pgdata`）。启动方式：`cd server && HOST=0.0.0.0 npx tsx --env-file=.env.dev ./sources/main.ts`。
+- 提交：`1f7129c`（PTY 中继主体）、`f40afba`（session 对齐 + 自动 rejoin）。
