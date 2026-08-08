@@ -83,18 +83,34 @@ function truncateForDisplay(s, maxLen) {
     return s.slice(0, maxLen) + '… +' + (s.length - maxLen) + ' chars';
 }
 
-function extractMessageText(msg) {
+// Split a claude jsonl message into renderable parts. The web transcript view
+// renders these structurally (text lines, tool cards, results, thinking),
+// so no [tool_use: ...] text markers are inlined into the text.
+function extractMessageParts(msg) {
     const content = msg.message?.content;
+    const parts = { text: '', thinking: '', toolCalls: [], toolResults: [] };
     if (Array.isArray(content)) {
-        const parts = [];
+        const texts = [];
         for (const block of content) {
-            if (block.type === 'text') parts.push(block.text || '');
-            else if (block.type === 'tool_use') parts.push(`[tool_use: ${block.name} ${JSON.stringify(block.input)}]`);
-            else if (block.type === 'tool_result') parts.push(`[tool_result: ${truncateForDisplay(block.content || '', 500)}]`);
+            if (block.type === 'text') texts.push(block.text || '');
+            else if (block.type === 'thinking') {
+                parts.thinking += (parts.thinking ? '\n' : '') + (block.thinking || '');
+            } else if (block.type === 'tool_use') {
+                parts.toolCalls.push({
+                    name: block.name,
+                    args: (block.input && typeof block.input === 'object' && !Array.isArray(block.input)) ? block.input : {},
+                });
+            } else if (block.type === 'tool_result') {
+                let c = block.content;
+                if (Array.isArray(c)) c = c.map(x => (x && x.text) || '').join('\n');
+                parts.toolResults.push({ content: truncateForDisplay(String(c ?? ''), 2000), isError: !!block.is_error });
+            }
         }
-        return parts.join('\n');
+        parts.text = texts.join('\n');
+    } else if (typeof content === 'string') {
+        parts.text = content;
     }
-    return typeof content === 'string' ? content : '';
+    return parts;
 }
 
 // Watches ~/.claude/projects/<projectDirName(cwd)>/ for the latest .jsonl file.
@@ -183,12 +199,12 @@ class JsonlWatcher {
             const role = msg.type;
             if (role !== 'user' && role !== 'assistant') continue;
 
-            const text = extractMessageText(msg);
-            if (!text.trim()) continue;
+            const parts = extractMessageParts(msg);
+            if (!parts.text.trim() && !parts.thinking.trim() && !parts.toolCalls.length && !parts.toolResults.length) continue;
 
-            if (role === 'user' && !this.firstUserText) {
-                this.firstUserText = text;
-                this.onTitle(truncateForDisplay(text.replace(/\s+/g, ' ').trim(), 60));
+            if (role === 'user' && parts.text.trim() && !this.firstUserText) {
+                this.firstUserText = parts.text;
+                this.onTitle(truncateForDisplay(parts.text.replace(/\s+/g, ' ').trim(), 60));
             }
 
             const metadata = {};
@@ -198,19 +214,11 @@ class JsonlWatcher {
                     output: msg.message.usage.output_tokens || 0,
                 };
             }
-            if (msg.message?.content) {
-                const content = msg.message.content;
-                if (Array.isArray(content)) {
-                    const toolCalls = content.filter(b => b.type === 'tool_use').map(b => ({
-                        name: b.name,
-                        args: b.input && typeof b.input === 'object' && !Array.isArray(b.input) ? b.input : {},
-                        result: content.find(r => r.type === 'tool_result' && r.tool_use_id === b.id)?.content || null,
-                    }));
-                    if (toolCalls.length) metadata.toolCalls = toolCalls;
-                }
-            }
+            if (parts.thinking) metadata.thinking = parts.thinking;
+            if (parts.toolCalls.length) metadata.toolCalls = parts.toolCalls;
+            if (parts.toolResults.length) metadata.toolResults = parts.toolResults;
 
-            this.onMessage(role, text, metadata);
+            this.onMessage(role, parts.text, metadata);
         }
     }
 }
@@ -222,6 +230,6 @@ module.exports = {
     getClaudeProjectsDir,
     getProjectDirName,
     findLatestJsonl,
-    extractMessageText,
+    extractMessageParts,
     truncateForDisplay,
 };

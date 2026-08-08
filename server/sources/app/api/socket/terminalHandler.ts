@@ -203,6 +203,34 @@ export function terminalHandler(userId: string, socket: Socket, io: Server) {
         }
     });
 
+    // Lightweight state query for the transcript view (which never joins the
+    // terminal room but still needs the current state to enable its input box)
+    socket.on('term:query-state', (data: any, callback: (response: any) => void) => {
+        try {
+            const { sessionId } = data ?? {};
+            if (!sessionId || typeof sessionId !== 'string') {
+                if (callback) callback({ ok: false, error: 'sessionId required' });
+                return;
+            }
+            const session = termSessions.get(termKey(userId, sessionId));
+            if (!session) {
+                if (callback) callback({ ok: false, error: 'session not found' });
+                return;
+            }
+            if (callback) {
+                callback({
+                    ok: true,
+                    meta: session.meta,
+                    state: session.state,
+                    exitCode: session.exitCode
+                });
+            }
+        } catch (error) {
+            log({ module: 'websocket', level: 'error' }, `Error in term:query-state: ${error}`);
+            if (callback) callback({ ok: false, error: 'internal error' });
+        }
+    });
+
     socket.on('term:leave', (data: any) => {
         try {
             const { sessionId } = data ?? {};

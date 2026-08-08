@@ -8,13 +8,10 @@ var allSessions = [];
 var refreshTimer = null;
 var socket = null;
 
-// Terminal view state
-var term = null;            // xterm Terminal instance for the current session
-var termFit = null;         // FitAddon instance
-var termRO = null;          // ResizeObserver on the terminal container
-var termResizeTimer = null; // debounce timer for fit/resize
-var termState = null;       // running | exited | offline
-var sessionMeta = {};       // sessionId -> {title, deviceName, cwd, claudeSessionId} from term:join / term:meta
+// Transcript view state
+var termState = null;       // running | exited | offline | null (unknown)
+var sessionStates = {};     // sessionId -> {state, exitCode} remembered across switches
+var sessionMeta = {};       // sessionId -> {title, deviceName, cwd, claudeSessionId} from term:meta
 var $ = function(id) { return document.getElementById(id); };
 
 function applyTheme() {
@@ -181,19 +178,28 @@ function loadMachines() {
 }
 
 function selectSession(s) {
-    if (currentSessionId && currentSessionId !== s.id && socket) {
-        socket.emit("term:leave", { sessionId: currentSessionId });
-    }
     currentSessionId = s.id;
     currentSession = s;
     renderSessions(allSessions);
     $("placeholder").classList.add("hidden");
-    $("term-wrap").classList.remove("hidden");
-    $("term-reconnect-btn").classList.remove("hidden");
-    disposeTerminal();
+    $("messages").classList.remove("hidden");
+    $("input-area").classList.remove("hidden");
     updateTermHeader();
-    setTermState(null);
-    joinTerminal(s.id);
+    var stored = sessionStates[s.id] || {};
+    setTermState(stored.state || null, stored.exitCode);
+    // Ask the daemon-side registry for the live state — cached state may be
+    // stale or missing entirely when the web page opens after the daemon.
+    if (socket && socket.connected) {
+        socket.emit("term:query-state", { sessionId: s.id }, function(ack) {
+            if (s.id !== currentSessionId) return;
+            if (ack && ack.ok) {
+                setTermState(ack.state, ack.exitCode);
+                if (ack.meta) applySessionMeta(s.id, ack.meta);
+            }
+        });
+    }
+    $("messages-inner").innerHTML = '<div class="empty">Loading messages...</div>';
+    loadMessages();
 }
 
 function deleteSession(id, event) {
@@ -201,12 +207,10 @@ function deleteSession(id, event) {
     if (!confirm("Delete this session? It will reappear if the host restarts claude.")) return;
     api("DELETE", "/v1/sessions/" + id).then(function() {
         if (currentSessionId === id) {
-            if (socket) socket.emit("term:leave", { sessionId: id });
-            disposeTerminal();
             currentSessionId = null;
             currentSession = null;
-            $("term-wrap").classList.add("hidden");
-            $("term-reconnect-btn").classList.add("hidden");
+            $("messages").classList.add("hidden");
+            $("input-area").classList.add("hidden");
             $("term-title").textContent = "Select a session";
             $("term-device").textContent = "";
             setTermState(null);
@@ -216,23 +220,13 @@ function deleteSession(id, event) {
     }).catch(function(e) { alert(e.message); });
 }
 
-// ===== Terminal view (xterm.js over Socket.IO relay) =====
-
-var XTERM_THEME = {
-    background: "#0d0d0d",
-    foreground: "#e6e6e6",
-    cursor: "#aeafad",
-    cursorAccent: "#0d0d0d",
-    selectionBackground: "#3a3d41",
-    black: "#000000", red: "#cd3131", green: "#0dbc79", yellow: "#e5e510",
-    blue: "#2472c8", magenta: "#bc3fbc", cyan: "#11a8cd", white: "#e5e5e5",
-    brightBlack: "#666666", brightRed: "#f14c4c", brightGreen: "#23d18b",
-    brightYellow: "#f5f543", brightBlue: "#3b8eea", brightMagenta: "#d670d6",
-    brightCyan: "#29b8db", brightWhite: "#ffffff"
-};
+// ===== Transcript view (plaintext messages over REST + Socket.IO) =====
 
 function setTermState(state, exitCode) {
     termState = state;
+    if (currentSessionId) {
+        sessionStates[currentSessionId] = { state: state, exitCode: exitCode };
+    }
     var dot = $("term-dot");
     dot.className = "term-dot" + (state ? " " + state : " hidden");
     var txt = $("term-state-text");
@@ -240,9 +234,20 @@ function setTermState(state, exitCode) {
         txt.textContent = "session exited" + (exitCode != null ? " (code " + exitCode + ")" : "") + " — input disabled";
     } else if (state === "offline") {
         txt.textContent = "device offline — input disabled";
-    } else {
+    } else if (state === "running") {
         txt.textContent = "";
+    } else {
+        txt.textContent = "session not running";
     }
+    updateInputState();
+}
+
+function updateInputState() {
+    var running = termState === "running";
+    var input = $("msg-input");
+    input.disabled = !running;
+    input.placeholder = running ? "Send a message..." : "session not running";
+    $("send-btn").disabled = !running || !input.value.trim();
 }
 
 function updateTermHeader() {
@@ -261,75 +266,248 @@ function applySessionMeta(sessionId, meta) {
     renderSessions(allSessions);
 }
 
-function disposeTerminal() {
-    if (termRO) { termRO.disconnect(); termRO = null; }
-    if (termResizeTimer) { clearTimeout(termResizeTimer); termResizeTimer = null; }
-    if (term) { term.dispose(); term = null; }
-    termFit = null;
-    termState = null;
+function applySessionState(sessionId, state, exitCode) {
+    if (!sessionId || !state) return;
+    sessionStates[sessionId] = { state: state, exitCode: exitCode };
+    if (sessionId === currentSessionId) setTermState(state, exitCode);
 }
 
-function scheduleTermFit() {
-    if (termResizeTimer) clearTimeout(termResizeTimer);
-    termResizeTimer = setTimeout(function() {
-        termResizeTimer = null;
-        if (!term || !termFit || !currentSessionId) return;
-        try { termFit.fit(); } catch (e) { return; }
-        if (socket) {
-            socket.emit("term:resize", { sessionId: currentSessionId, cols: term.cols, rows: term.rows });
-        }
-    }, 200);
-}
-
-function joinTerminal(sessionId) {
-    if (!socket) return;
-    socket.emit("term:join", { sessionId: sessionId }, function(ack) {
-        // The user may have switched sessions while the join was in flight
-        if (sessionId !== currentSessionId) {
-            socket.emit("term:leave", { sessionId: sessionId });
+function loadMessages() {
+    if (!currentSessionId) return;
+    api("GET", "/v1/sessions/" + currentSessionId + "/plaintext-messages").then(function(data) {
+        var container = $("messages-inner");
+        var messages = data.messages || [];
+        if (messages.length === 0) {
+            container.innerHTML = '<div class="empty">No messages yet.</div>';
             return;
         }
-        if (!ack || !ack.ok) {
-            $("term-state-text").textContent = (ack && ack.error) ? String(ack.error) : "failed to join terminal";
-            return;
-        }
-        disposeTerminal();
-        term = new Terminal({
-            cursorBlink: true,
-            fontSize: 13,
-            fontFamily: "Menlo, monospace",
-            theme: XTERM_THEME
-        });
-        termFit = new FitAddon.FitAddon();
-        term.loadAddon(termFit);
-        term.open($("term-container"));
-        try { termFit.fit(); } catch (e) {}
-        if (ack.scrollback) term.write(ack.scrollback);
-        if (ack.meta) applySessionMeta(sessionId, ack.meta);
-        setTermState(ack.state || "offline");
-        term.onData(function(data) {
-            if (termState !== "running" || sessionId !== currentSessionId || !socket) return;
-            socket.emit("term:input", { sessionId: sessionId, data: data });
-        });
-        termRO = new ResizeObserver(scheduleTermFit);
-        termRO.observe($("term-container"));
-        // Sync the initial size so the host PTY matches the web terminal
-        if (termState === "running") {
-            socket.emit("term:resize", { sessionId: sessionId, cols: term.cols, rows: term.rows });
-        }
+        container.innerHTML = "";
+        messages.forEach(function(m) { renderMessage(container, m); });
+        scrollToBottom();
+    }).catch(function(e) {
+        $("messages-inner").innerHTML = '<div class="empty">Cannot load messages.</div>';
+        console.error(e);
     });
 }
 
-$("term-reconnect-btn").onclick = function() {
-    if (!currentSessionId || !socket) return;
-    socket.emit("term:leave", { sessionId: currentSessionId });
-    disposeTerminal();
-    setTermState(null);
-    joinTerminal(currentSessionId);
+function scrollToBottom() {
+    var m = $("messages");
+    m.scrollTop = m.scrollHeight;
+}
+
+function appendMessage(m, autoScroll) {
+    var container = $("messages-inner");
+    var empty = container.querySelector(".empty");
+    if (empty) empty.remove();
+    renderMessage(container, m);
+    if (autoScroll) scrollToBottom();
+}
+
+function renderMessage(container, m) {
+    var role = m.role;
+    var meta = m.metadata || {};
+    var hasToolResults = role === "user" && Array.isArray(meta.toolResults) && meta.toolResults.length > 0;
+
+    var entry = document.createElement("div");
+    entry.className = "entry";
+
+    if (hasToolResults) {
+        // Tool results travel as role=user messages; render them as indented
+        // ⎿ blocks without the ❯ user prompt.
+        meta.toolResults.forEach(function(tr) {
+            entry.appendChild(renderToolResult(tr));
+        });
+    } else {
+        if (role === "assistant" && meta.thinking) {
+            entry.appendChild(renderThinkingBlock(meta.thinking));
+        }
+        if (m.content && m.content.trim()) {
+            entry.appendChild(renderTextLine(role, m.content));
+        }
+        if (role === "assistant" && Array.isArray(meta.toolCalls)) {
+            meta.toolCalls.forEach(function(tc) {
+                entry.appendChild(renderToolCall(tc));
+            });
+        }
+        if (role === "assistant" && meta.tokens && (meta.tokens.input || meta.tokens.output)) {
+            var tok = document.createElement("div");
+            tok.className = "tokens-line";
+            tok.textContent = "✻ " + (meta.tokens.input || 0) + "↑ " + (meta.tokens.output || 0) + "↓";
+            entry.appendChild(tok);
+        }
+    }
+
+    if (m.createdAt) {
+        var time = document.createElement("div");
+        time.className = "entry-time";
+        time.textContent = fmt(m.createdAt);
+        entry.appendChild(time);
+    }
+    container.appendChild(entry);
+}
+
+function renderTextLine(role, content) {
+    var line = document.createElement("div");
+    line.className = "entry-line " + (role === "user" ? "user" : "assistant");
+    var prompt = document.createElement("div");
+    prompt.className = "entry-prompt";
+    prompt.textContent = role === "user" ? "❯" : "⏺";
+    var body = document.createElement("div");
+    body.className = "entry-content";
+    body.innerHTML = formatContent(content);
+    line.appendChild(prompt);
+    line.appendChild(body);
+    return line;
+}
+
+// Plain text + fenced code blocks (<pre>); no full markdown.
+function formatContent(text) {
+    var codeBlocks = [];
+    // esc() first; extracted code chunks are already escaped, do not re-escape
+    var html = esc(text);
+    html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, function(_, lang, code) {
+        var placeholder = "\x00CODEBLOCK_" + codeBlocks.length + "\x00";
+        codeBlocks.push("<pre><code>" + code.trim() + "</code></pre>");
+        return placeholder;
+    });
+    var parts = html.split(/\n\n+/);
+    html = parts.map(function(p) {
+        if (p.indexOf("\x00CODEBLOCK_") !== -1) return p;
+        return "<p>" + p.replace(/\n/g, "<br>") + "</p>";
+    }).join("");
+    html = html.replace(/\x00CODEBLOCK_(\d+)\x00/g, function(_, i) {
+        return codeBlocks[parseInt(i, 10)];
+    });
+    return html;
+}
+
+function renderThinkingBlock(thinking) {
+    var wrap = document.createElement("div");
+    wrap.className = "thinking-block";
+    var header = document.createElement("div");
+    header.className = "thinking-toggle";
+    header.textContent = "Thought for a while (click to expand)";
+    var body = document.createElement("div");
+    body.className = "thinking-body";
+    body.textContent = thinking;
+    header.onclick = function() {
+        var open = wrap.classList.toggle("open");
+        header.textContent = "Thought for a while " + (open ? "(click to collapse)" : "(click to expand)");
+    };
+    wrap.appendChild(header);
+    wrap.appendChild(body);
+    return wrap;
+}
+
+var TOOL_ARG_KEYS = {
+    Bash: "command", Read: "file_path", Write: "file_path", Edit: "file_path",
+    MultiEdit: "file_path", NotebookEdit: "notebook_path", Glob: "pattern",
+    Grep: "pattern", LS: "path", WebFetch: "url", WebSearch: "query",
+    Task: "description"
 };
 
-window.addEventListener("resize", scheduleTermFit);
+function toolCallKeyArg(name, args) {
+    if (!args || typeof args !== "object") return "";
+    var v = args[TOOL_ARG_KEYS[name]];
+    if (typeof v !== "string") {
+        for (var k in args) {
+            if (typeof args[k] === "string") { v = args[k]; break; }
+        }
+    }
+    if (typeof v !== "string") return "";
+    v = v.replace(/\s+/g, " ").trim();
+    return v.length > 80 ? v.slice(0, 80) + "…" : v;
+}
 
+function renderToolCall(tc) {
+    var wrap = document.createElement("div");
+    wrap.className = "tool-call";
+    var summary = document.createElement("div");
+    summary.className = "tool-call-summary";
+    var arg = toolCallKeyArg(tc.name, tc.args);
+    summary.innerHTML =
+        '<span class="entry-prompt">⏺</span>' +
+        '<span class="tool-call-text">' + esc(tc.name || "tool") + "(" + esc(arg) + ")</span>";
+    wrap.appendChild(summary);
+    var argsText = "";
+    if (tc.args) {
+        try { argsText = JSON.stringify(tc.args, null, 2); } catch (e) { argsText = String(tc.args); }
+    }
+    if (argsText) {
+        var pre = document.createElement("pre");
+        pre.className = "tool-call-args";
+        pre.textContent = argsText;
+        wrap.appendChild(pre);
+        summary.title = "Click to expand args";
+        summary.onclick = function() { wrap.classList.toggle("open"); };
+    }
+    return wrap;
+}
+
+var RESULT_COLLAPSE_LINES = 10;
+
+function renderToolResult(tr) {
+    var wrap = document.createElement("div");
+    wrap.className = "tool-result" + (tr && tr.isError ? " error" : "");
+    var prompt = document.createElement("span");
+    prompt.className = "result-prompt";
+    prompt.textContent = "⎿";
+    var right = document.createElement("div");
+    right.className = "result-right";
+    var body = document.createElement("div");
+    body.className = "result-body";
+    var text = tr && tr.content != null ? String(tr.content) : "";
+    var lines = text.split("\n");
+    if (lines.length > RESULT_COLLAPSE_LINES) {
+        var head = lines.slice(0, RESULT_COLLAPSE_LINES).join("\n");
+        body.textContent = head;
+        var hidden = lines.length - RESULT_COLLAPSE_LINES;
+        var toggle = document.createElement("div");
+        toggle.className = "result-collapse-toggle";
+        toggle.textContent = "… +" + hidden + " lines (click to expand)";
+        var expanded = false;
+        toggle.onclick = function() {
+            expanded = !expanded;
+            body.textContent = expanded ? text : head;
+            toggle.textContent = expanded ? "▾ collapse" : "… +" + hidden + " lines (click to expand)";
+        };
+        right.appendChild(body);
+        right.appendChild(toggle);
+    } else {
+        body.textContent = text;
+        right.appendChild(body);
+    }
+    wrap.appendChild(prompt);
+    wrap.appendChild(right);
+    return wrap;
+}
+
+// Send user input into the claude PTY via the daemon relay. No optimistic
+// render and no REST POST: the message reappears once the jsonl watcher
+// pushes it back as a plaintext-message update.
+function sendMessage() {
+    var input = $("msg-input");
+    var text = input.value.trim();
+    if (!text || !currentSessionId || termState !== "running" || !socket) return;
+    socket.emit("term:input", { sessionId: currentSessionId, data: text + "\r" });
+    input.value = "";
+    input.style.height = "auto";
+    $("send-btn").disabled = true;
+}
+
+// Textarea auto-resize
+$("msg-input").addEventListener("input", function() {
+    this.style.height = "auto";
+    this.style.height = Math.min(180, this.scrollHeight) + "px";
+    $("send-btn").disabled = termState !== "running" || !this.value.trim();
+});
+$("msg-input").addEventListener("keydown", function(e) {
+    if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+    }
+});
+$("send-btn").onclick = sendMessage;
 
 // Login tabs
 document.querySelectorAll(".connect-tab").forEach(function(tab) {
@@ -417,30 +595,35 @@ function initSocket() {
 
     socket.on('connect', function() {
         console.log('Socket.IO connected');
-        // After a reconnect the server-side room membership is gone; re-join the
-        // open session and rebuild the terminal from the server scrollback.
-        if (currentSessionId) {
-            disposeTerminal();
-            setTermState(null);
-            joinTerminal(currentSessionId);
-        }
+        // After a reconnect, any plaintext messages pushed while offline were
+        // missed; reload the open transcript from REST.
+        if (currentSessionId) loadMessages();
     });
 
     socket.on('connect_error', function(err) {
         console.error('Socket.IO connect error:', err);
     });
 
-    socket.on('term:output', function(msg) {
-        if (!msg || msg.sessionId !== currentSessionId || !term) return;
-        term.write(msg.data);
+    socket.on('update', function(payload) {
+        if (!payload || !payload.body || payload.body.t !== 'plaintext-message') return;
+        if (payload.body.sid !== currentSessionId) return;
+        appendMessage(payload.body.message, true);
+    });
+
+    // Session lifecycle/meta (term:state/term:meta) are fanned out to
+    // user-scoped connections as ephemeral events (no room join required).
+    socket.on('ephemeral', function(payload) {
+        if (!payload || !payload.sessionId) return;
+        if (payload.type === 'terminal-state') {
+            applySessionState(payload.sessionId, payload.state, payload.exitCode);
+        } else if (payload.type === 'terminal-meta') {
+            applySessionMeta(payload.sessionId, payload.meta);
+        }
     });
 
     socket.on('term:state', function(msg) {
-        if (!msg || msg.sessionId !== currentSessionId) return;
-        setTermState(msg.state, msg.exitCode);
-        if (!term) return;
-        if (msg.state === 'offline') term.write("\r\n\x1b[90m[connection lost]\x1b[0m\r\n");
-        if (msg.state === 'exited') term.write("\r\n\x1b[90m[session exited]\x1b[0m\r\n");
+        if (!msg || !msg.sessionId) return;
+        applySessionState(msg.sessionId, msg.state, msg.exitCode);
     });
 
     socket.on('term:meta', function(msg) {
@@ -456,7 +639,6 @@ function initSocket() {
 function logout() {
     ["cch_token", "cch_account_id"].forEach(function(k) { localStorage.removeItem(k); });
     TOKEN = ""; ACCOUNT_ID = ""; currentSessionId = null; currentSession = null; allSessions = [];
-    disposeTerminal();
     location.reload();
 }
 
@@ -539,20 +721,20 @@ function copyText(txt) {
     return Promise.resolve();
 }
 
-function terminalQuote(s) {
+function shellQuote(s) {
     if (s.indexOf("'") === -1) return "'" + s + "'";
     if (s.indexOf('"') === -1) return '"' + s + '"';
     return "'" + s.replace(/'/g, "'\"'\"'") + "'";
 }
 
 function copyForCch(conn) {
-    return "./target/release/cch connect " + terminalQuote(conn);
+    return "./target/release/cch connect " + shellQuote(conn);
 }
 function copyForCcd(conn) {
-    return "./target/release/ccd connect " + terminalQuote(conn);
+    return "./target/release/ccd connect " + shellQuote(conn);
 }
 function copyForNode(conn) {
-    return "node index.js connect " + terminalQuote(conn) + " && node index.js";
+    return "node index.js connect " + shellQuote(conn) + " && node index.js";
 }
 
 // Events

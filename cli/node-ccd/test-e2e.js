@@ -133,6 +133,18 @@ async function main() {
         const meta = await waitFor(() => metas.find(m => m.claudeSessionId), 15000);
         check('term:meta carries claudeSessionId', !!meta,
             meta ? `claude=${meta.claudeSessionId.slice(0, 8)} title=${JSON.stringify(meta.title || '')}` : `metas seen: ${metas.length}`);
+        // The transcript view's data source: the typed message must round-trip
+        // through the jsonl watcher into the server's plaintext messages
+        const axios = require('axios');
+        const userMsg = await waitFor(async () => {
+            try {
+                const resp = await axios.get(`${server}/v1/sessions/${sessionId}/plaintext-messages?role=user&limit=50`, {
+                    headers: { Authorization: `Bearer ${authToken}` }, timeout: 10000,
+                });
+                return (resp.data.messages || []).find(m => (m.content || '').includes('hi'));
+            } catch (e) { return null; }
+        }, 20000);
+        check('user message round-trips via jsonl to REST', !!userMsg);
     }
 
     // --- 5. resize ---
