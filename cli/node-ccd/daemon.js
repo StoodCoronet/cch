@@ -181,6 +181,12 @@ function spawnSession({ profile, cwd, cols, rows, resume }) {
         ...(profile.model ? { ANTHROPIC_MODEL: profile.model } : {}),
         ...(profile.base_url ? { ANTHROPIC_BASE_URL: profile.base_url } : {}),
     };
+    // The daemon is often started detached (no TTY), so process.env may lack
+    // TERM or carry NO_COLOR — claude then renders without colors. Force a
+    // color-capable terminal identity for the PTY child.
+    env.TERM = 'xterm-256color';
+    env.COLORTERM = 'truecolor';
+    delete env.NO_COLOR;
     // Resume mode: the claudeSessionId is the latest jsonl file name for this cwd
     let resumeClaudeSessionId = null;
     if (resume) {

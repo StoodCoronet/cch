@@ -335,4 +335,24 @@ export function adminRoutes(app: Fastify) {
     app.get('/user.js', async (_request, reply) => {
         reply.type('application/javascript').send(readFileSync(process.cwd() + "/user.js", "utf-8"));
     });
+    // Locally vendored browser libs (socket.io client, xterm) — avoids CDN
+    // flakiness and works on restricted networks.
+    const vendorTypes: Record<string, string> = {
+        '.js': 'application/javascript',
+        '.css': 'text/css',
+        '.map': 'application/json',
+    };
+    app.get('/vendor/:file', async (request, reply) => {
+        const file = (request.params as any).file as string;
+        if (!/^[\w.-]+$/.test(file)) {
+            return reply.code(400).send({ error: 'bad file' });
+        }
+        const ext = file.slice(file.lastIndexOf('.'));
+        try {
+            return reply.type(vendorTypes[ext] || 'application/octet-stream')
+                .send(readFileSync(process.cwd() + "/vendor/" + file));
+        } catch {
+            return reply.code(404).send({ error: 'not found' });
+        }
+    });
 }
