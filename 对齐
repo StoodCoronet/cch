@@ -82,5 +82,5 @@ web (xterm.js) ◀─term-output── server ◀── node-ccd daemon ◀─�
 - server `terminalHandler.ts`：term:register/output/state/meta、term:join/input/resize、256KB 滚动缓冲回放、daemon 断线广播 offline。
 - web 会话页 = xterm.js 终端（状态栏 + 在线点 + 重连按钮），断线重连自动 rejoin 并回放 scrollback。
 - session 身份：spawn 即建 server session（pending tag 防同 cwd 冲突）；首条消息后 watcher 发现 claudeSessionId → term:meta + PATCH tag 对齐（`server/sources/app/api/routes/sessionRoutes.ts` 新增 PATCH `/v1/sessions/:id/tag`）。
-- 本地开发 DB 从 PGlite 切到外部 Postgres（PGlite 数据目录损坏无法修复）：`server/.env.dev` 现 `DB_PROVIDER=postgres` + `DATABASE_URL`，容器 `cch-pg`（postgres:16, 数据卷 `server/.pgdata`）。启动方式：`cd server && HOST=0.0.0.0 npx tsx --env-file=.env.dev ./sources/main.ts`。
+- 本地开发 DB：**Docker Postgres（仅数据库容器化）+ server 用 tsx watch 热重载**。容器 `cch-dev-postgres`（postgres:16，数据卷 `server/.pgdata`，`--restart unless-stopped`），`.env.dev` 为 `DB_PROVIDER=postgres` + `DATABASE_URL`。server 启动：`cd server && HOST=0.0.0.0 npx tsx watch --env-file=.env.dev ./sources/main.ts`。说明：PGlite 无法容器化（它是嵌进 server 进程的 wasm 库，不是独立服务）；PGlite 嵌入式方案曾因 tsx watch 硬杀进程导致数据目录损坏，故数据库放外部 Postgres，热重载随便用。
 - 提交：`1f7129c`（PTY 中继主体）、`f40afba`（session 对齐 + 自动 rejoin）。
