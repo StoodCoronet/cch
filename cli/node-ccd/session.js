@@ -219,10 +219,45 @@ class JsonlWatcher {
                 continue;
             }
             if (msg.isMeta || msg.isCompactSummary) continue;
+
+            // Slash commands are recorded in two forms:
+            //   - type:system subtype:local_command (e.g. /rename), with the
+            //     result in a separate <local-command-stdout> line
+            //   - user-role messages whose content is <command-name> XML
+            //     (e.g. /clear). Surface both as structured command records
+            // instead of leaking raw XML into the transcript.
+            if (msg.type === 'system' && msg.subtype === 'local_command') {
+                const content = typeof msg.content === 'string' ? msg.content : '';
+                const stdout = content.match(/<local-command-stdout>([\s\S]*?)<\/local-command-stdout>/);
+                if (stdout && stdout[1].trim()) {
+                    this.onMessage('system', stdout[1].trim(), {});
+                    continue;
+                }
+                const cmdName = content.match(/<command-name>([\s\S]*?)<\/command-name>/);
+                if (cmdName) {
+                    const cmdArgs = content.match(/<command-args>([\s\S]*?)<\/command-args>/);
+                    const args = cmdArgs ? cmdArgs[1].trim() : '';
+                    this.onMessage('user', cmdName[1].trim() + (args ? ' ' + args : ''), {
+                        command: { name: cmdName[1].trim(), args },
+                    });
+                }
+                continue;
+            }
             const role = msg.type;
             if (role !== 'user' && role !== 'assistant') continue;
 
             const parts = extractMessageParts(msg);
+            if (role === 'user') {
+                const cmdName = parts.text.match(/^\s*<command-name>([\s\S]*?)<\/command-name>/);
+                if (cmdName) {
+                    const cmdArgs = parts.text.match(/<command-args>([\s\S]*?)<\/command-args>/);
+                    const args = cmdArgs ? cmdArgs[1].trim() : '';
+                    this.onMessage('user', cmdName[1].trim() + (args ? ' ' + args : ''), {
+                        command: { name: cmdName[1].trim(), args },
+                    });
+                    continue;
+                }
+            }
             if (!parts.text.trim() && !parts.thinking.trim() && !parts.toolCalls.length && !parts.toolResults.length) continue;
 
             if (role === 'user' && parts.text.trim() && !this.firstUserText) {

@@ -145,6 +145,33 @@ async function main() {
             } catch (e) { return null; }
         }, 20000);
         check('user message round-trips via jsonl to REST', !!userMsg);
+
+        // Blind slash command from the web: /rename with args executes without
+        // any TUI interaction; the invocation and its stdout must arrive as
+        // structured records, and the session title must flip.
+        socket.emit('term:input', { sessionId, data: '/rename e2e-rename' });
+        await sleep(400);
+        socket.emit('term:input', { sessionId, data: '\r' });
+        let cmdMsg = null, sysMsg = null;
+        for (let i = 0; i < 40 && !(cmdMsg && sysMsg); i++) {
+            await sleep(500);
+            try {
+                const r = await axios.get(`${server}/v1/sessions/${sessionId}/plaintext-messages`, {
+                    headers: { Authorization: `Bearer ${authToken}` }, timeout: 10000,
+                });
+                const msgs = r.data.messages || [];
+                cmdMsg = msgs.find(m => m.metadata && m.metadata.command && m.metadata.command.name === '/rename');
+                sysMsg = msgs.find(m => m.role === 'system' && (m.content || '').includes('renamed'));
+            } catch (e) { /* retry */ }
+        }
+        check('slash command record (/rename)', !!cmdMsg,
+            cmdMsg ? JSON.stringify(cmdMsg.metadata.command) : 'not found in REST');
+        check('command stdout record (system role)', !!sysMsg, sysMsg ? sysMsg.content : 'not found');
+        const renamed = await waitFor(async () => {
+            const ack = await new Promise(r => socket.emit('term:query-state', { sessionId }, r));
+            return ack && ack.meta && ack.meta.title === 'e2e-rename';
+        }, 10000);
+        check('title syncs after /rename', !!renamed);
     }
 
     // --- 5. resize ---

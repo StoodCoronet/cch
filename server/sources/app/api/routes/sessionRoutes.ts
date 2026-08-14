@@ -495,6 +495,14 @@ export function sessionRoutes(app: Fastify) {
                         output: z.number().optional(),
                         cost: z.number().optional(),
                     }).optional(),
+                    command: z.object({
+                        name: z.string(),
+                        args: z.string().optional(),
+                    }).optional(),
+                    toolResults: z.array(z.object({
+                        content: z.string(),
+                        isError: z.boolean().optional(),
+                    })).optional(),
                 }).optional(),
             }),
         },

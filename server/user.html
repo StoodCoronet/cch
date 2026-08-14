@@ -159,6 +159,9 @@ button,input,textarea,select{font-family:inherit;font-size:inherit}
 .entry-prompt{flex-shrink:0;width:16px;text-align:center;font-weight:600;font-family:"SF Mono","Fira Code",monospace}
 .entry-line.user .entry-prompt{color:var(--chat-user-prompt)}
 .entry-line.assistant .entry-prompt{color:var(--chat-assistant-prompt)}
+.entry-command .entry-prompt.command{color:var(--chat-user-prompt)}
+.entry-command .command-text{color:var(--fg-secondary);font-weight:600}
+.entry-system{color:var(--fg-tertiary);font-size:12px;padding-left:24px}
 .entry-content{flex:1;min-width:0;color:var(--chat-fg);white-space:pre-wrap;word-break:break-word}
 .entry-content p{margin:0 0 8px 0}
 .entry-content p:last-child{margin-bottom:0}

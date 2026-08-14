@@ -322,7 +322,26 @@ function renderMessage(container, m) {
     var entry = document.createElement("div");
     entry.className = "entry";
 
-    if (hasToolResults) {
+    if (meta.command && meta.command.name) {
+        // Slash command record (e.g. /clear, /rename) — subtle command line
+        var cmd = document.createElement("div");
+        cmd.className = "entry-line entry-command";
+        var cmdPrompt = document.createElement("span");
+        cmdPrompt.className = "entry-prompt command";
+        cmdPrompt.textContent = "❯";
+        var cmdText = document.createElement("span");
+        cmdText.className = "command-text";
+        cmdText.textContent = meta.command.name + (meta.command.args ? " " + meta.command.args : "");
+        cmd.appendChild(cmdPrompt);
+        cmd.appendChild(cmdText);
+        entry.appendChild(cmd);
+    } else if (role === "system") {
+        // Command stdout (e.g. "Session renamed to: ...") — small gray ⎿ line
+        var sys = document.createElement("div");
+        sys.className = "entry-line entry-system";
+        sys.textContent = "⎿  " + (m.content || "");
+        entry.appendChild(sys);
+    } else if (hasToolResults) {
         // Tool results travel as role=user messages; render them as indented
         // ⎿ blocks without the ❯ user prompt.
         meta.toolResults.forEach(function(tr) {
