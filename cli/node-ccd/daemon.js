@@ -496,8 +496,14 @@ async function handleCommand(conn, msg) {
         }
         case 'attach': {
             const session = findSession(msg.sessionId);
-            if (!session) return { ok: false, error: 'session not found' };
-            if (msg.cols && msg.rows && session.state !== 'exited') {
+            if (!session) return { ok: false, error: 'no such session' };
+            // Refuse to attach to a dead PTY: the client would switch to raw
+            // stream mode against a dead end and appear to hang.
+            if (session.state !== 'running') {
+                const code = session.exitCode === null || session.exitCode === undefined ? '?' : session.exitCode;
+                return { ok: false, error: `session exited (code ${code}) — resume it instead` };
+            }
+            if (msg.cols && msg.rows) {
                 session.cols = msg.cols;
                 session.rows = msg.rows;
                 session.pty.resize(msg.cols, msg.rows);

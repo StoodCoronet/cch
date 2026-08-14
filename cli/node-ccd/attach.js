@@ -85,8 +85,11 @@ function attach(sessionId) {
                     return;
                 }
                 if (!resp.ok) {
-                    console.error(`attach failed: ${resp.error || 'unknown error'}`);
-                    cleanup('closed');
+                    // Reject so the caller's catch prints the error and exits 1
+                    // (resolving here would silently exit 0 after the print).
+                    settled = true;
+                    try { sock.destroy(); } catch (e) { /* ignore */ }
+                    reject(new Error(resp.error || 'attach failed'));
                     return;
                 }
                 ready = true;

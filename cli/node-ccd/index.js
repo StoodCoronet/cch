@@ -4,7 +4,7 @@
 //   node index.js stop                 stop the daemon
 //   node index.js status               daemon status + session list
 //   node index.js ls                   list sessions
-//   node index.js attach <sessionId>   attach to a running session
+//   node index.js attach [sessionId]   attach to a session (no id / -a: pick interactively)
 //   node index.js spawn <profile> [cwd] spawn a session non-interactively and attach
 //   node index.js conversations <cwd>  list claude conversations for a cwd
 //   node index.js                      TUI: pick profile -> spawn -> attach
@@ -15,6 +15,7 @@ const net = require('net');
 const { spawn: spawnChild } = require('child_process');
 const axios = require('axios');
 const { loadProfiles, pickProfileTUI } = require('./tui');
+const { pickSession } = require('./picksession');
 const { attach } = require('./attach');
 
 // --- Configuration ---
@@ -223,11 +224,59 @@ async function cmdLs() {
 }
 
 async function cmdAttach(sessionId) {
-    if (!sessionId) { console.error('Usage: node index.js attach <sessionId>'); process.exit(1); }
+    if (!sessionId) return cmdPickAttach();
     await ensureDaemon();
     const result = await attach(sessionId);
     if (result === 'detached') {
         console.log(`\ndetached; session still running, re-attach: node index.js attach ${sessionId}`);
+    }
+}
+
+// Interactive session picker (attach without an id, or `-a`): running sessions
+// attach directly; exited ones are resumed via their claudeSessionId.
+async function cmdPickAttach() {
+    if (!process.stdout.isTTY) {
+        console.error('session picker requires a TTY; use: node index.js attach <sessionId>');
+        process.exit(1);
+    }
+    await ensureDaemon();
+    const list = await ipcCall({ cmd: 'list' });
+    const picked = await pickSession(list.sessions || []);
+    if (!picked) return;
+    if (picked.state === 'running') {
+        const result = await attach(picked.sessionId);
+        if (result === 'detached') {
+            console.log(`\ndetached; session still running, re-attach: node index.js attach ${picked.sessionId}`);
+        }
+        return;
+    }
+    // Exited session: resume the claude conversation under the same server tag
+    if (!picked.claudeSessionId) {
+        console.error('cannot resume: no claude session id');
+        process.exit(1);
+    }
+    const profiles = loadProfiles();
+    const profile = profiles.find(p => p.name === picked.profile);
+    if (!profile) {
+        console.error(`cannot resume: profile '${picked.profile}' not found. Available: ${profiles.map(p => p.name).join(', ') || '(none)'}`);
+        process.exit(1);
+    }
+    const resp = await ipcCall({
+        cmd: 'spawn',
+        profile,
+        cwd: picked.cwd,
+        cols: process.stdout.columns || 80,
+        rows: process.stdout.rows || 24,
+        resumeId: picked.claudeSessionId,
+    });
+    if (!resp.ok) {
+        console.error(`resume failed: ${resp.error}`);
+        process.exit(1);
+    }
+    console.log(`resumed session: ${resp.sessionId}`);
+    const result = await attach(resp.sessionId);
+    if (result === 'detached') {
+        console.log(`\ndetached; session still running, re-attach: node index.js attach ${resp.sessionId}`);
     }
 }
 
@@ -315,12 +364,13 @@ async function main() {
         case 'status': return cmdStatus();
         case 'ls': return cmdLs();
         case 'attach': return cmdAttach(args[1]);
+        case '-a': return cmdPickAttach();
         case 'spawn': return cmdSpawn(args[1], args[2]);
         case 'conversations': return cmdConversations(args[1]);
         case undefined: return cmdDefault();
         default:
             console.error(`unknown command: ${cmd}`);
-            console.error('commands: connect | start | stop | status | ls | attach <id> | spawn <profile> [cwd] | conversations <cwd>');
+            console.error('commands: connect | start | stop | status | ls | attach [id] | -a | spawn <profile> [cwd] | conversations <cwd>');
             process.exit(1);
     }
 }
