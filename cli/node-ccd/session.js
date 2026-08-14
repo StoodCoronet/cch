@@ -169,9 +169,27 @@ class JsonlWatcher {
         });
         if (!jsonlPath) return;
         if (jsonlPath !== this.lastJsonlPath) {
+            const isResumeTarget = this.expectedId && path.basename(jsonlPath, '.jsonl') === this.expectedId;
             this.lastJsonlPath = jsonlPath;
-            this.lastOffset = 0;
+            // Scan existing content for title lines (summary / custom-title from
+            // /rename) so resumed conversations get their name back.
+            try {
+                const existing = fs.readFileSync(jsonlPath, 'utf-8').split('\n');
+                for (const line of existing) {
+                    if (!line.includes('custom-title') && !line.includes('"summary"')) continue;
+                    try {
+                        const m = JSON.parse(line);
+                        if (m.type === 'custom-title' && m.customTitle) this.onTitle(m.customTitle);
+                        else if (m.type === 'summary' && m.summary) this.onTitle(m.summary);
+                    } catch (e) { /* ignore */ }
+                }
+            } catch (e) { /* ignore */ }
+            // Resume target: history is already on the server under the same tag,
+            // so skip replaying it (avoids duplicate messages). New conversations
+            // (/clear, fresh) replay from the start as before.
+            this.lastOffset = isResumeTarget ? fs.statSync(jsonlPath).size : 0;
             this.onClaudeSessionId(path.basename(jsonlPath, '.jsonl'));
+            if (isResumeTarget) return;
         }
         const stats = fs.statSync(jsonlPath);
         if (stats.size <= this.lastOffset) return;
@@ -193,6 +211,11 @@ class JsonlWatcher {
             }
             if (msg.type === 'summary' && msg.summary) {
                 this.onTitle(msg.summary);
+                continue;
+            }
+            // claude /rename writes {"type":"custom-title","customTitle":"..."}
+            if (msg.type === 'custom-title' && msg.customTitle) {
+                this.onTitle(msg.customTitle);
                 continue;
             }
             if (msg.isMeta || msg.isCompactSummary) continue;

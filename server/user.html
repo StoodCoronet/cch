@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>CCH</title>
+<link rel="stylesheet" href="/vendor/xterm.css">
 <style>
 :root {
   /* DeepSeek-inspired dark-first palette */
@@ -207,6 +208,14 @@ button,input,textarea,select{font-family:inherit;font-size:inherit}
 #send-btn svg{width:16px;height:16px}
 .input-hint{text-align:center;font-size:11px;color:var(--chat-fg-secondary);margin-top:8px;font-family:"SF Mono","Fira Code",monospace}
 
+/* Live terminal overlay (covers the transcript area; terminal is always dark) */
+.term-overlay{position:absolute;top:36px;left:0;right:0;bottom:0;z-index:20;display:flex;flex-direction:column;background:#0d0d0d}
+.term-overlay-bar{height:32px;display:flex;align-items:center;padding:0 8px 0 12px;gap:8px;background:var(--bg-elevated);border-bottom:1px solid var(--border);flex-shrink:0}
+.term-overlay-title{flex:1;font-size:12px;font-weight:600;color:var(--fg-secondary);font-family:"SF Mono","Fira Code",monospace}
+.term-overlay-bar .icon-btn{width:26px;height:26px}
+.term-overlay-body{flex:1;min-height:0;padding:6px 4px 4px 8px;background:#0d0d0d;display:flex}
+.term-overlay-body .xterm{height:100%}
+
 /* Connect screen */
 #connect-screen{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:var(--bg);z-index:100}
 .connect-card{width:420px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:18px;padding:32px;box-shadow:var(--shadow)}
@@ -339,6 +348,7 @@ button,input,textarea,select{font-family:inherit;font-size:inherit}
       <div class="term-title" id="term-title">Select a session</div>
       <div class="term-device" id="term-device"></div>
       <div class="term-state-text" id="term-state-text"></div>
+      <button class="icon-btn hidden" id="term-toggle-btn" title="Open live terminal">&gt;_</button>
     </div>
     <div class="placeholder" id="placeholder">
       <div class="logo-placeholder"></div>
@@ -352,6 +362,13 @@ button,input,textarea,select{font-family:inherit;font-size:inherit}
         <button id="send-btn" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9"></polygon></svg></button>
       </div>
       <div class="input-hint">Press Enter to send, Shift+Enter for new line</div>
+    </div>
+    <div class="term-overlay hidden" id="term-overlay">
+      <div class="term-overlay-bar">
+        <span class="term-overlay-title">Terminal (live)</span>
+        <button class="icon-btn" id="term-close-btn" title="Back to transcript">×</button>
+      </div>
+      <div class="term-overlay-body" id="term-container"></div>
     </div>
   </main>
 </div>
@@ -391,6 +408,8 @@ button,input,textarea,select{font-family:inherit;font-size:inherit}
 </div>
 
 <script src="/vendor/socket.io.min.js"></script>
+<script src="/vendor/xterm.js"></script>
+<script src="/vendor/xterm-addon-fit.js"></script>
 <script src="/user.js"></script>
 </body>
 </html>

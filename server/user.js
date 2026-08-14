@@ -12,6 +12,13 @@ var socket = null;
 var termState = null;       // running | exited | offline | null (unknown)
 var sessionStates = {};     // sessionId -> {state, exitCode} remembered across switches
 var sessionMeta = {};       // sessionId -> {title, deviceName, cwd, claudeSessionId} from term:meta
+
+// Live terminal overlay state (xterm.js over Socket.IO relay)
+var term = null;            // xterm Terminal instance while the overlay is open
+var termFit = null;         // FitAddon instance
+var termRO = null;          // ResizeObserver on the terminal container
+var termResizeTimer = null; // debounce timer for fit/resize
+var termOpen = false;       // whether the overlay is currently shown
 var $ = function(id) { return document.getElementById(id); };
 
 function applyTheme() {
@@ -178,12 +185,14 @@ function loadMachines() {
 }
 
 function selectSession(s) {
+    if (termOpen) closeTerminal(true);
     currentSessionId = s.id;
     currentSession = s;
     renderSessions(allSessions);
     $("placeholder").classList.add("hidden");
     $("messages").classList.remove("hidden");
     $("input-area").classList.remove("hidden");
+    $("term-toggle-btn").classList.remove("hidden");
     updateTermHeader();
     var stored = sessionStates[s.id] || {};
     setTermState(stored.state || null, stored.exitCode);
@@ -207,10 +216,12 @@ function deleteSession(id, event) {
     if (!confirm("Delete this session? It will reappear if the host restarts claude.")) return;
     api("DELETE", "/v1/sessions/" + id).then(function() {
         if (currentSessionId === id) {
+            closeTerminal(true);
             currentSessionId = null;
             currentSession = null;
             $("messages").classList.add("hidden");
             $("input-area").classList.add("hidden");
+            $("term-toggle-btn").classList.add("hidden");
             $("term-title").textContent = "Select a session";
             $("term-device").textContent = "";
             setTermState(null);
@@ -509,6 +520,114 @@ $("msg-input").addEventListener("keydown", function(e) {
 });
 $("send-btn").onclick = sendMessage;
 
+// ===== Live terminal overlay (xterm.js over Socket.IO relay) =====
+//
+// Fallback for claude TUI interactions the transcript cannot show (e.g.
+// /resume pickers, permission prompts). Covers the transcript area, relays
+// keystrokes into the daemon PTY via term:input and renders term:output.
+// While open, the host PTY follows the web terminal size (term:resize), so
+// a local TUI attached to the same session may briefly look garbled — a
+// known and accepted trade-off.
+
+var XTERM_THEME = {
+    background: "#0d0d0d",
+    foreground: "#e6e6e6",
+    cursor: "#aeafad",
+    cursorAccent: "#0d0d0d",
+    selectionBackground: "#3a3d41",
+    black: "#000000", red: "#cd3131", green: "#0dbc79", yellow: "#e5e510",
+    blue: "#2472c8", magenta: "#bc3fbc", cyan: "#11a8cd", white: "#e5e5e5",
+    brightBlack: "#666666", brightRed: "#f14c4c", brightGreen: "#23d18b",
+    brightYellow: "#f5f543", brightBlue: "#3b8eea", brightMagenta: "#d670d6",
+    brightCyan: "#29b8db", brightWhite: "#ffffff"
+};
+
+function disposeTerminal() {
+    if (termRO) { termRO.disconnect(); termRO = null; }
+    if (termResizeTimer) { clearTimeout(termResizeTimer); termResizeTimer = null; }
+    if (term) { term.dispose(); term = null; }
+    termFit = null;
+}
+
+function scheduleTermFit() {
+    if (termResizeTimer) clearTimeout(termResizeTimer);
+    termResizeTimer = setTimeout(function() {
+        termResizeTimer = null;
+        if (!term || !termFit || !currentSessionId) return;
+        try { termFit.fit(); } catch (e) { return; }
+        if (socket) {
+            socket.emit("term:resize", { sessionId: currentSessionId, cols: term.cols, rows: term.rows });
+        }
+    }, 200);
+}
+
+function openTerminal() {
+    if (!currentSessionId || !socket || termOpen) return;
+    termOpen = true;
+    $("term-overlay").classList.remove("hidden");
+    joinTerminal(currentSessionId);
+}
+
+function closeTerminal(skipReload) {
+    if (!termOpen) return;
+    termOpen = false;
+    if (socket && currentSessionId) {
+        socket.emit("term:leave", { sessionId: currentSessionId });
+    }
+    disposeTerminal();
+    $("term-overlay").classList.add("hidden");
+    // The terminal session may have produced new messages; refresh the
+    // transcript underneath.
+    if (!skipReload && currentSessionId) loadMessages();
+}
+
+function joinTerminal(sessionId) {
+    socket.emit("term:join", { sessionId: sessionId }, function(ack) {
+        // The user may have switched sessions or closed the overlay while
+        // the join was in flight.
+        if (sessionId !== currentSessionId || !termOpen) {
+            socket.emit("term:leave", { sessionId: sessionId });
+            return;
+        }
+        if (!ack || !ack.ok) {
+            closeTerminal(true);
+            $("term-state-text").textContent = (ack && ack.error) ? String(ack.error) : "failed to join terminal";
+            return;
+        }
+        disposeTerminal();
+        term = new Terminal({
+            cursorBlink: true,
+            fontSize: 13,
+            fontFamily: "Menlo, monospace",
+            theme: XTERM_THEME
+        });
+        termFit = new FitAddon.FitAddon();
+        term.loadAddon(termFit);
+        term.open($("term-container"));
+        try { termFit.fit(); } catch (e) {}
+        if (ack.scrollback) term.write(ack.scrollback);
+        if (ack.meta) applySessionMeta(sessionId, ack.meta);
+        if (ack.state) applySessionState(sessionId, ack.state, ack.exitCode);
+        term.onData(function(data) {
+            if (termState !== "running" || sessionId !== currentSessionId || !socket) return;
+            socket.emit("term:input", { sessionId: sessionId, data: data });
+        });
+        termRO = new ResizeObserver(scheduleTermFit);
+        termRO.observe($("term-container"));
+        // Sync the initial size so the host PTY matches the web terminal
+        if (termState === "running") {
+            socket.emit("term:resize", { sessionId: sessionId, cols: term.cols, rows: term.rows });
+        }
+    });
+}
+
+$("term-toggle-btn").onclick = function() {
+    if (termOpen) closeTerminal(); else openTerminal();
+};
+$("term-close-btn").onclick = function() { closeTerminal(); };
+
+window.addEventListener("resize", scheduleTermFit);
+
 // Login tabs
 document.querySelectorAll(".connect-tab").forEach(function(tab) {
     tab.onclick = function() {
@@ -598,6 +717,11 @@ function initSocket() {
         // After a reconnect, any plaintext messages pushed while offline were
         // missed; reload the open transcript from REST.
         if (currentSessionId) loadMessages();
+        // Room membership is gone too; re-join the live terminal overlay.
+        if (termOpen && currentSessionId) {
+            disposeTerminal();
+            joinTerminal(currentSessionId);
+        }
     });
 
     socket.on('connect_error', function(err) {
@@ -619,6 +743,11 @@ function initSocket() {
         } else if (payload.type === 'terminal-meta') {
             applySessionMeta(payload.sessionId, payload.meta);
         }
+    });
+
+    socket.on('term:output', function(msg) {
+        if (!msg || msg.sessionId !== currentSessionId || !term) return;
+        term.write(msg.data);
     });
 
     socket.on('term:state', function(msg) {
