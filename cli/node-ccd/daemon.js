@@ -16,8 +16,10 @@ const {
     JsonlWatcher,
     getProjectDirName,
     findLatestJsonl,
+    listConversations,
 } = require('./session');
 const { loadConfig, bootstrap, CONFIG_DIR, PID_FILE, LOG_FILE, SOCK_FILE } = require('./index');
+const { loadProfiles } = require('./tui');
 
 // --- Logging: everything goes to ~/.ccd/daemon.log, never stdout ---
 fs.mkdirSync(CONFIG_DIR, { recursive: true });
@@ -174,7 +176,9 @@ async function finalizeServerSession(session) {
 }
 
 // --- Session lifecycle ---
-function spawnSession({ profile, cwd, cols, rows, resume }) {
+// resumeId (an explicit claudeSessionId) takes priority over the resume bool,
+// which keeps its original meaning: resume the latest jsonl for this cwd.
+function spawnSession({ profile, cwd, cols, rows, resume, resumeId }) {
     const env = {
         ...process.env,
         ...(profile.env || {}),
@@ -187,9 +191,10 @@ function spawnSession({ profile, cwd, cols, rows, resume }) {
     env.TERM = 'xterm-256color';
     env.COLORTERM = 'truecolor';
     delete env.NO_COLOR;
-    // Resume mode: the claudeSessionId is the latest jsonl file name for this cwd
-    let resumeClaudeSessionId = null;
-    if (resume) {
+    // Resume mode: the claudeSessionId is either given explicitly (resumeId)
+    // or resolved from the latest jsonl file name for this cwd (resume bool).
+    let resumeClaudeSessionId = resumeId || null;
+    if (!resumeClaudeSessionId && resume) {
         const jsonlPath = findLatestJsonl(cwd);
         if (jsonlPath) resumeClaudeSessionId = path.basename(jsonlPath, '.jsonl');
     }
@@ -305,6 +310,22 @@ function findSession(id) {
     return sessions.get(id) || null;
 }
 
+// Shared session table shape for both the IPC `list` command and the
+// `list-sessions` socket RPC.
+function listSessionsPayload() {
+    return [...sessions.values()]
+        .filter(s => s.serverReady)
+        .map(s => ({
+            sessionId: s.sessionId,
+            claudeSessionId: s.claudeSessionId,
+            title: s.title,
+            cwd: s.cwd,
+            profile: s.profile.name,
+            state: s.state,
+            createdAt: s.createdAt,
+        }));
+}
+
 // --- Socket.IO to server ---
 function connectServer() {
     socket = io(server, {
@@ -346,15 +367,92 @@ function connectServer() {
         session.rows = payload.rows;
         session.pty.resize(payload.cols, payload.rows);
     });
+
+    socket.on('ccd:rpc', (msg) => {
+        handleRpc(msg).then((resp) => {
+            if (!resp) return;
+            if (socket && socket.connected) {
+                socket.emit('ccd:rpc-result', resp);
+            } else {
+                console.warn(`ccd:rpc result dropped (socket disconnected): reqId=${resp.reqId}`);
+            }
+        }).catch((e) => {
+            console.error(`ccd:rpc handler error: ${e.stack || e.message}`);
+        });
+    });
+}
+
+// --- Socket RPC (ccd:rpc / ccd:rpc-result) ---
+// The server relays web-originated requests to the machine-scoped socket as
+// {reqId, method, params}; we answer with {reqId, result} or {reqId, error}.
+async function handleRpc(msg) {
+    const reqId = msg && msg.reqId;
+    if (!reqId) return null;
+    try {
+        const result = await handleRpcMethod(msg.method, msg.params || {});
+        return { reqId, result };
+    } catch (e) {
+        return { reqId, error: e.message || String(e) };
+    }
+}
+
+async function handleRpcMethod(method, params) {
+    switch (method) {
+        case 'list-profiles': {
+            // Sanitized: env and other sensitive profile fields stay local.
+            const profiles = loadProfiles().map(p => ({
+                name: p.name,
+                description: p.description,
+                model: p.model,
+                base_url: p.base_url,
+                backend: p.backend,
+            }));
+            return { profiles };
+        }
+        case 'list-conversations': {
+            if (!params.cwd) throw new Error('list-conversations requires cwd');
+            return { conversations: listConversations(params.cwd) };
+        }
+        case 'list-sessions': {
+            return { sessions: listSessionsPayload() };
+        }
+        case 'spawn': {
+            const { cwd, profileName, resumeId } = params;
+            if (!cwd || !profileName) throw new Error('spawn requires cwd and profileName');
+            let cwdStat = null;
+            try {
+                cwdStat = fs.statSync(cwd);
+            } catch (e) { /* fall through */ }
+            if (!cwdStat || !cwdStat.isDirectory()) throw new Error(`cwd does not exist: ${cwd}`);
+            const profile = loadProfiles().find(p => p.name === profileName);
+            if (!profile) throw new Error(`profile not found: ${profileName}`);
+            const session = spawnSession({ profile, cwd, cols: params.cols, rows: params.rows, resumeId });
+            return new Promise((resolve, reject) => {
+                session.spawnResolve = (resp) => {
+                    if (resp.ok) resolve({ sessionId: resp.sessionId });
+                    else reject(new Error(resp.error));
+                };
+                finalizeServerSession(session);
+            });
+        }
+        case 'kill': {
+            const session = findSession(params.sessionId);
+            if (!session) throw new Error('session not found');
+            killSession(session, 'rpc kill');
+            return {};
+        }
+        default:
+            throw new Error(`unknown method: ${method}`);
+    }
 }
 
 // --- IPC (unix socket, newline-delimited JSON) ---
 async function handleCommand(conn, msg) {
     switch (msg.cmd) {
         case 'spawn': {
-            const { profile, cwd, cols, rows, resume } = msg;
+            const { profile, cwd, cols, rows, resume, resumeId } = msg;
             if (!profile || !cwd) return { ok: false, error: 'spawn requires profile and cwd' };
-            const session = spawnSession({ profile, cwd, cols, rows, resume });
+            const session = spawnSession({ profile, cwd, cols, rows, resume, resumeId });
             return new Promise((resolve) => {
                 session.spawnResolve = resolve;
                 // Create the server session immediately: the PTY terminal is
@@ -365,20 +463,11 @@ async function handleCommand(conn, msg) {
             });
         }
         case 'list': {
-            return {
-                ok: true,
-                sessions: [...sessions.values()]
-                    .filter(s => s.serverReady)
-                    .map(s => ({
-                        sessionId: s.sessionId,
-                        claudeSessionId: s.claudeSessionId,
-                        title: s.title,
-                        cwd: s.cwd,
-                        profile: s.profile.name,
-                        state: s.state,
-                        createdAt: s.createdAt,
-                    })),
-            };
+            return { ok: true, sessions: listSessionsPayload() };
+        }
+        case 'list-conversations': {
+            if (!msg.cwd) return { ok: false, error: 'list-conversations requires cwd' };
+            return { ok: true, conversations: listConversations(msg.cwd) };
         }
         case 'kill': {
             const session = findSession(msg.sessionId);

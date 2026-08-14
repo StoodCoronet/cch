@@ -78,6 +78,79 @@ function findLatestJsonl(cwd, includeFile) {
     return files.length ? files[0].path : null;
 }
 
+// Derive a conversation title from a jsonl transcript: the last custom-title
+// (/rename) or summary line wins; otherwise fall back to the first plain-text
+// user message (slash-command wrappers excluded), truncated to 60 chars.
+function readConversationTitle(jsonlPath) {
+    let content;
+    try {
+        content = fs.readFileSync(jsonlPath, 'utf-8');
+    } catch (e) {
+        return null;
+    }
+    let title = null;
+    let firstUserText = null;
+    for (const line of content.split('\n')) {
+        if (!line.trim()) continue;
+        if (title && firstUserText) break;
+        const maybeTitleLine = line.includes('custom-title') || line.includes('"summary"');
+        if (!maybeTitleLine && (firstUserText || !line.includes('"user"'))) continue;
+        let msg;
+        try {
+            msg = JSON.parse(line);
+        } catch (e) {
+            continue;
+        }
+        if (msg.type === 'custom-title' && msg.customTitle) {
+            title = msg.customTitle;
+            continue;
+        }
+        if (msg.type === 'summary' && msg.summary) {
+            title = msg.summary;
+            continue;
+        }
+        if (firstUserText || msg.type !== 'user' || msg.isMeta) continue;
+        const msgContent = msg.message && msg.message.content;
+        let text = '';
+        if (typeof msgContent === 'string') {
+            text = msgContent;
+        } else if (Array.isArray(msgContent)) {
+            text = msgContent.filter(b => b && b.type === 'text').map(b => b.text || '').join('\n');
+        }
+        text = text.trim();
+        if (!text || text.includes('<command-name>')) continue;
+        firstUserText = text;
+    }
+    if (title) return title;
+    if (firstUserText) return truncateForDisplay(firstUserText.replace(/\s+/g, ' ').trim(), 60);
+    return null;
+}
+
+// List claude conversations for a cwd by scanning its project jsonl directory.
+// Returns [{claudeSessionId, title, updatedAt}] sorted by updatedAt desc, max 50.
+function listConversations(cwd) {
+    const projDir = path.join(getClaudeProjectsDir(), getProjectDirName(cwd));
+    if (!fs.existsSync(projDir)) return [];
+    const conversations = [];
+    for (const f of fs.readdirSync(projDir)) {
+        if (!f.endsWith('.jsonl')) continue;
+        const jsonlPath = path.join(projDir, f);
+        let stat;
+        try {
+            stat = fs.statSync(jsonlPath);
+        } catch (e) {
+            continue;
+        }
+        conversations.push({
+            claudeSessionId: path.basename(f, '.jsonl'),
+            title: readConversationTitle(jsonlPath),
+            updatedAt: stat.mtimeMs,
+        });
+    }
+    conversations.sort((a, b) => b.updatedAt - a.updatedAt);
+    return conversations.slice(0, 50);
+}
+
 function truncateForDisplay(s, maxLen) {
     if (s.length <= maxLen) return s;
     return s.slice(0, maxLen) + '… +' + (s.length - maxLen) + ' chars';
@@ -288,6 +361,7 @@ module.exports = {
     getClaudeProjectsDir,
     getProjectDirName,
     findLatestJsonl,
+    listConversations,
     extractMessageParts,
     truncateForDisplay,
 };

@@ -113,7 +113,9 @@ $("connect-modal").onclick = function(e) {
     if (e.target === $("connect-modal")) closeModal();
 };
 document.addEventListener("keydown", function(e) {
-    if (e.key === "Escape" && $("connect-modal").classList.contains("open")) closeModal();
+    if (e.key !== "Escape") return;
+    if ($("connect-modal").classList.contains("open")) closeModal();
+    if ($("spawn-modal").classList.contains("open")) closeSpawnModal();
 });
 
 // Search
@@ -130,7 +132,7 @@ function closeSidebar() {
 }
 
 function loadSessions() {
-    api("GET", "/v1/sessions").then(function(data) {
+    return api("GET", "/v1/sessions").then(function(data) {
         console.log("loadSessions response:", data);
         allSessions = data.sessions || [];
         $("scount").textContent = allSessions.length;
@@ -779,6 +781,8 @@ function initSocket() {
         applySessionMeta(msg.sessionId, msg.meta);
     });
 
+    socket.on('ccd:rpc-result', handleRpcResult);
+
     socket.on('disconnect', function() {
         console.log('Socket.IO disconnected');
     });
@@ -884,6 +888,184 @@ function copyForCcd(conn) {
 function copyForNode(conn) {
     return "node index.js connect " + shellQuote(conn) + " && node index.js";
 }
+
+// ===== New / Resume session modal (daemon RPC over the ccd:rpc relay) =====
+
+var rpcSeq = 0;
+var rpcPending = {};        // reqId -> {resolve, reject}
+var spawnConversations = [];// conversations for the current cwd
+var spawnSelectedConv = null; // claudeSessionId to resume, or null = new session
+
+function ccdRpc(method, params) {
+    return new Promise(function(resolve, reject) {
+        if (!socket || !socket.connected) {
+            reject(new Error("no daemon online"));
+            return;
+        }
+        var reqId = "rpc-" + Date.now() + "-" + (++rpcSeq) + "-" + Math.random().toString(36).slice(2, 8);
+        rpcPending[reqId] = { resolve: resolve, reject: reject };
+        socket.emit("ccd:rpc", { reqId: reqId, method: method, params: params || {} });
+        // The server answers with an error after 30s when no daemon responds.
+    });
+}
+
+function handleRpcResult(msg) {
+    if (!msg || !msg.reqId) return;
+    var p = rpcPending[msg.reqId];
+    if (!p) return;
+    delete rpcPending[msg.reqId];
+    if (msg.error) {
+        p.reject(new Error(typeof msg.error === "string" ? msg.error : (msg.error.message || "rpc error")));
+    } else {
+        p.resolve(msg.result);
+    }
+}
+
+function spawnErrorText(e) {
+    var msg = (e && e.message) || String(e);
+    if (msg.indexOf("no daemon online") !== -1) return "No daemon online — connect a device first";
+    return msg;
+}
+
+function openSpawnModal() {
+    $("spawn-modal").classList.add("open");
+    $("spawn-error").textContent = "";
+    spawnConversations = [];
+    spawnSelectedConv = null;
+    renderSpawnConversations();
+    var meta = sessionMeta[currentSessionId] || {};
+    $("spawn-cwd").value = meta.cwd || "";
+    loadSpawnData();
+    if ($("spawn-cwd").value.trim()) loadSpawnConversations();
+    updateSpawnSubmit();
+    $("spawn-cwd").focus();
+}
+
+function closeSpawnModal() {
+    $("spawn-modal").classList.remove("open");
+}
+
+function loadSpawnData() {
+    ccdRpc("list-profiles").then(function(res) {
+        var profiles = (res && res.profiles) || [];
+        var sel = $("spawn-profile");
+        sel.innerHTML = "";
+        profiles.forEach(function(p) {
+            var opt = document.createElement("option");
+            opt.value = p.name;
+            var extra = p.description || p.model || p.backend || "";
+            opt.textContent = p.name + (extra ? " — " + extra : "");
+            sel.appendChild(opt);
+        });
+        if (!profiles.length) {
+            var opt = document.createElement("option");
+            opt.value = "";
+            opt.textContent = "(no profiles)";
+            sel.appendChild(opt);
+        }
+        updateSpawnSubmit();
+    }).catch(function(e) {
+        $("spawn-error").textContent = spawnErrorText(e);
+    });
+    ccdRpc("list-sessions").then(function(res) {
+        var sessions = (res && res.sessions) || [];
+        var seen = {};
+        var list = $("spawn-cwd-list");
+        list.innerHTML = "";
+        sessions.forEach(function(s) {
+            if (!s.cwd || seen[s.cwd]) return;
+            seen[s.cwd] = true;
+            var opt = document.createElement("option");
+            opt.value = s.cwd;
+            list.appendChild(opt);
+        });
+    }).catch(function(e) {
+        $("spawn-error").textContent = spawnErrorText(e);
+    });
+}
+
+function loadSpawnConversations() {
+    var cwd = $("spawn-cwd").value.trim();
+    spawnConversations = [];
+    spawnSelectedConv = null;
+    updateSpawnSubmit();
+    var box = $("spawn-conv-list");
+    if (!cwd) { renderSpawnConversations(); return; }
+    box.innerHTML = '<div class="empty">Loading conversations...</div>';
+    ccdRpc("list-conversations", { cwd: cwd }).then(function(res) {
+        spawnConversations = (res && res.conversations) || [];
+        renderSpawnConversations();
+    }).catch(function(e) {
+        box.innerHTML = '<div class="empty">' + esc(spawnErrorText(e)) + '</div>';
+    });
+}
+
+function renderSpawnConversations() {
+    var box = $("spawn-conv-list");
+    box.innerHTML = "";
+    var items = [{ claudeSessionId: null }].concat(spawnConversations);
+    items.forEach(function(c) {
+        var el = document.createElement("div");
+        el.className = "conv-item" + (c.claudeSessionId === spawnSelectedConv ? " selected" : "");
+        var title;
+        if (c.claudeSessionId === null) {
+            title = "✚ New session";
+        } else {
+            title = c.title || c.claudeSessionId.slice(0, 8);
+        }
+        var updatedAt = typeof c.updatedAt === "number" ? c.updatedAt : Date.parse(c.updatedAt);
+        el.innerHTML =
+            '<span class="conv-title">' + esc(title) + '</span>' +
+            (updatedAt ? '<span class="conv-time">' + esc(ago(updatedAt)) + '</span>' : '');
+        el.onclick = function() {
+            spawnSelectedConv = c.claudeSessionId;
+            renderSpawnConversations();
+            updateSpawnSubmit();
+        };
+        box.appendChild(el);
+    });
+}
+
+function updateSpawnSubmit() {
+    var btn = $("spawn-submit");
+    btn.disabled = !$("spawn-cwd").value.trim() || !$("spawn-profile").value;
+    btn.textContent = spawnSelectedConv ? "Resume" : "Start";
+}
+
+function submitSpawn() {
+    var cwd = $("spawn-cwd").value.trim();
+    var profileName = $("spawn-profile").value;
+    if (!cwd || !profileName) return;
+    var params = { cwd: cwd, profileName: profileName };
+    if (spawnSelectedConv) params.resumeId = spawnSelectedConv;
+    closeSpawnModal();
+    $("term-state-text").textContent = "starting...";
+    ccdRpc("spawn", params).then(function(res) {
+        if ($("term-state-text").textContent === "starting...") $("term-state-text").textContent = "";
+        var sid = res && res.sessionId;
+        if (!sid) return;
+        loadSessions().then(function() {
+            var found = null;
+            allSessions.forEach(function(x) { if (x.id === sid) found = x; });
+            // The daemon may not have created the server session yet; fall
+            // back to a minimal record so the view still opens.
+            selectSession(found || { id: sid, tag: null, createdAt: Date.now(), activeAt: Date.now(), msgCount: 0 });
+        });
+    }).catch(function(e) {
+        if ($("term-state-text").textContent === "starting...") $("term-state-text").textContent = "";
+        alert(spawnErrorText(e));
+    });
+}
+
+$("open-spawn-modal").onclick = openSpawnModal;
+$("close-spawn-modal").onclick = closeSpawnModal;
+$("spawn-modal").onclick = function(e) {
+    if (e.target === $("spawn-modal")) closeSpawnModal();
+};
+$("spawn-cwd").addEventListener("change", loadSpawnConversations);
+$("spawn-cwd").addEventListener("input", updateSpawnSubmit);
+$("spawn-profile").onchange = updateSpawnSubmit;
+$("spawn-submit").onclick = submitSpawn;
 
 // Events
 $("connect-btn").onclick = connect;

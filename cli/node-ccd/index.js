@@ -6,6 +6,7 @@
 //   node index.js ls                   list sessions
 //   node index.js attach <sessionId>   attach to a running session
 //   node index.js spawn <profile> [cwd] spawn a session non-interactively and attach
+//   node index.js conversations <cwd>  list claude conversations for a cwd
 //   node index.js                      TUI: pick profile -> spawn -> attach
 const fs = require('fs');
 const path = require('path');
@@ -258,6 +259,28 @@ async function cmdSpawn(profileName, cwd) {
     }
 }
 
+async function cmdConversations(cwd) {
+    if (!cwd) { console.error('Usage: node index.js conversations <cwd>'); process.exit(1); }
+    if (!(await isDaemonAlive())) {
+        console.error('daemon not running. Start with: node index.js start');
+        process.exit(1);
+    }
+    const resp = await ipcCall({ cmd: 'list-conversations', cwd });
+    if (!resp.ok) {
+        console.error(`list-conversations failed: ${resp.error}`);
+        process.exit(1);
+    }
+    const conversations = resp.conversations || [];
+    if (!conversations.length) {
+        console.log('no conversations');
+        return;
+    }
+    for (const c of conversations) {
+        const title = c.title ? ` "${c.title}"` : '';
+        console.log(`${c.claudeSessionId} ${new Date(c.updatedAt).toISOString()}${title}`);
+    }
+}
+
 async function cmdDefault() {
     await ensureDaemon();
     const profiles = loadProfiles();
@@ -293,10 +316,11 @@ async function main() {
         case 'ls': return cmdLs();
         case 'attach': return cmdAttach(args[1]);
         case 'spawn': return cmdSpawn(args[1], args[2]);
+        case 'conversations': return cmdConversations(args[1]);
         case undefined: return cmdDefault();
         default:
             console.error(`unknown command: ${cmd}`);
-            console.error('commands: connect | start | stop | status | ls | attach <id> | spawn <profile> [cwd]');
+            console.error('commands: connect | start | stop | status | ls | attach <id> | spawn <profile> [cwd] | conversations <cwd>');
             process.exit(1);
     }
 }
