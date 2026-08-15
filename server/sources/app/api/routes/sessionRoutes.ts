@@ -13,11 +13,21 @@ export function sessionRoutes(app: Fastify) {
     // Sessions API
     app.get('/v1/sessions', {
         preHandler: app.authenticate,
+        schema: {
+            querystring: z.object({
+                active: z.string().optional()
+            }).optional()
+        }
     }, async (request, reply) => {
         const userId = request.userId;
 
+        const where: Prisma.SessionWhereInput = { accountId: userId };
+        if (request.query?.active === 'true') {
+            where.active = true;
+        }
+
         const sessions = await db.session.findMany({
-            where: { accountId: userId },
+            where,
             orderBy: { updatedAt: 'desc' },
             take: 150,
             select: {
@@ -354,6 +364,38 @@ export function sessionRoutes(app: Fastify) {
             where: { id: sessionId },
             data: { tag }
         });
+        return reply.send({ ok: true });
+    });
+
+    // Update session fields (currently only `active`, used by the web UI to
+    // archive/unarchive sessions)
+    app.patch('/v1/sessions/:sessionId', {
+        schema: {
+            params: z.object({
+                sessionId: z.string()
+            }),
+            body: z.object({
+                active: z.boolean().optional()
+            })
+        },
+        preHandler: app.authenticate
+    }, async (request, reply) => {
+        const userId = request.userId;
+        const { sessionId } = request.params;
+        const { active } = request.body;
+
+        const session = await db.session.findFirst({
+            where: { id: sessionId, accountId: userId }
+        });
+        if (!session) {
+            return reply.code(404).send({ error: 'Session not found' });
+        }
+        if (typeof active === 'boolean') {
+            await db.session.update({
+                where: { id: sessionId },
+                data: { active }
+            });
+        }
         return reply.send({ ok: true });
     });
 

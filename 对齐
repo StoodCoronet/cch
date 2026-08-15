@@ -84,3 +84,19 @@ web (xterm.js) ◀─term-output── server ◀── node-ccd daemon ◀─�
 - session 身份：spawn 即建 server session（pending tag 防同 cwd 冲突）；首条消息后 watcher 发现 claudeSessionId → term:meta + PATCH tag 对齐（`server/sources/app/api/routes/sessionRoutes.ts` 新增 PATCH `/v1/sessions/:id/tag`）。
 - 本地开发 DB：**Docker Postgres（仅数据库容器化）+ server 用 tsx watch 热重载**。容器 `cch-dev-postgres`（postgres:16，数据卷 `server/.pgdata`，`--restart unless-stopped`），`.env.dev` 为 `DB_PROVIDER=postgres` + `DATABASE_URL`。server 启动：`cd server && HOST=0.0.0.0 npx tsx watch --env-file=.env.dev ./sources/main.ts`。说明：PGlite 无法容器化（它是嵌进 server 进程的 wasm 库，不是独立服务）；PGlite 嵌入式方案曾因 tsx watch 硬杀进程导致数据目录损坏，故数据库放外部 Postgres，热重载随便用。
 - 提交：`1f7129c`（PTY 中继主体）、`f40afba`（session 对齐 + 自动 rejoin）。
+
+## 9. 会话管理重设计（2026-08-15 访谈定稿）
+
+**侧边栏 = 只放活跃会话**：running + exited 未移除的（灰色标记，手动 × 移除=归档 active=false）。历史会话不进侧边栏。
+**Resume = 全局搜索面板**：跨设备列出所有 claude conversation（设备→项目分组、顶部搜索、单击恢复）。profile 自动带（server 端记忆：该 conversation 上次用的，没有则用全局上次）。
+**New = 独立流程**：显式选设备 + 目录（常用目录+手输）+ profile（记住全局上次）。
+**profile 记忆存 server**（UserKVStore：`profile:conv:<claudeSessionId>` 和 `profile:last`）。
+
+### 协议/接口新增
+- daemon RPC `list-all-conversations`：扫 `~/.claude/projects/*/*.jsonl`，每条返回 {claudeSessionId, title, cwd（读 jsonl 里的 cwd 字段，slug 不可逆所以必须读文件）, updatedAt}；按 updatedAt 倒序，上限 100。
+- server REST：`GET /v1/sessions?active=true` 过滤；`PATCH /v1/sessions/:id {active?}`（归档用）；`GET/PUT /v1/kv/:key`（account 隔离的字符串 KV，给 profile 记忆用）。
+- web：侧边栏只显示 active；New / Resume 拆成两个入口两个 modal。
+
+### 不做
+- 手动 folder（会话天然按 cwd 归属，自动分组已覆盖）。
+- daemon 会话表持久化（resume 走 tag 对齐已等价）。

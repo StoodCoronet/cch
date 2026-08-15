@@ -1,49 +1,78 @@
 import { z } from "zod";
 import { Fastify } from "../types";
-import { kvGet } from "@/app/kv/kvGet";
+import { db } from "@/storage/db";
 import { kvList } from "@/app/kv/kvList";
 import { kvBulkGet } from "@/app/kv/kvBulkGet";
 import { kvMutate } from "@/app/kv/kvMutate";
 import { log } from "@/utils/log";
 
 export function kvRoutes(app: Fastify) {
-    // GET /v1/kv/:key - Get single value
+    // Keys allowed for the simple string KV endpoints below
+    const kvKeySchema = z.string().regex(/^[a-zA-Z0-9:_-]{1,128}$/);
+
+    // GET /v1/kv/:key - Get single value as a plain string.
+    // Always 200: { value: string | null }, null when the key is missing or deleted.
     app.get('/v1/kv/:key', {
         preHandler: app.authenticate,
         schema: {
             params: z.object({
-                key: z.string()
-            }),
-            response: {
-                200: z.object({
-                    key: z.string(),
-                    value: z.string(),
-                    version: z.number()
-                }).nullable(),
-                404: z.object({
-                    error: z.literal('Key not found')
-                }),
-                500: z.object({
-                    error: z.literal('Failed to get value')
-                })
-            }
+                key: kvKeySchema
+            })
         }
     }, async (request, reply) => {
         const userId = request.userId;
         const { key } = request.params;
 
-        try {
-            const result = await kvGet({ uid: userId }, key);
-
-            if (!result) {
-                return reply.code(404).send({ error: 'Key not found' });
+        const result = await db.userKVStore.findUnique({
+            where: {
+                accountId_key: {
+                    accountId: userId,
+                    key
+                }
             }
+        });
 
-            return reply.send(result);
-        } catch (error) {
-            log({ module: 'api', level: 'error' }, `Failed to get KV value: ${error}`);
-            return reply.code(500).send({ error: 'Failed to get value' });
+        return reply.send({
+            value: result?.value ? Buffer.from(result.value).toString('utf8') : null
+        });
+    });
+
+    // PUT /v1/kv/:key - Upsert a plain string value (max 4KB)
+    app.put('/v1/kv/:key', {
+        preHandler: app.authenticate,
+        schema: {
+            params: z.object({
+                key: kvKeySchema
+            }),
+            body: z.object({
+                value: z.string().max(4096)
+            })
         }
+    }, async (request, reply) => {
+        const userId = request.userId;
+        const { key } = request.params;
+        const { value } = request.body;
+
+        await db.userKVStore.upsert({
+            where: {
+                accountId_key: {
+                    accountId: userId,
+                    key
+                }
+            },
+            create: {
+                accountId: userId,
+                key,
+                value: new Uint8Array(Buffer.from(value, 'utf8')),
+                version: 0
+            },
+            update: {
+                value: new Uint8Array(Buffer.from(value, 'utf8')),
+                version: { increment: 1 }
+            }
+        });
+
+        return reply.send({ ok: true });
     });
 
     // GET /v1/kv - List key-value pairs with optional prefix filter

@@ -78,7 +78,8 @@ button,input,textarea,select{font-family:inherit;font-size:inherit}
 .sidebar-search input:focus{border-color:var(--border-strong)}
 
 .sidebar-section-title{padding:8px 18px 6px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;color:var(--fg-tertiary);display:flex;align-items:center}
-.new-session-btn{margin-left:auto;padding:3px 8px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--fg-secondary);font-size:11px;font-weight:600;letter-spacing:0;text-transform:none;cursor:pointer;transition:all .15s}
+.sidebar-section-title>span:first-child{flex:1;min-width:0}
+.new-session-btn{margin-left:6px;padding:3px 8px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--fg-secondary);font-size:11px;font-weight:600;letter-spacing:0;text-transform:none;cursor:pointer;transition:all .15s}
 .new-session-btn:hover{background:var(--bg-hover);color:var(--fg);border-color:var(--border-strong)}
 .clear-sessions-btn{margin-left:6px;padding:3px 8px;border-radius:6px;border:1px solid transparent;background:transparent;color:var(--fg-tertiary);font-size:11px;font-weight:600;letter-spacing:0;text-transform:none;cursor:pointer;transition:all .15s}
 .clear-sessions-btn:hover{color:var(--red);border-color:var(--red);background:rgba(239,68,68,.08)}
@@ -95,6 +96,7 @@ button,input,textarea,select{font-family:inherit;font-size:inherit}
 .session-item{padding:10px 12px;border-radius:10px;cursor:pointer;transition:background .12s;margin-bottom:3px;border:1px solid transparent}
 .session-item:hover{background:var(--bg-hover)}
 .session-item.selected{background:var(--bg-active);border-color:var(--border-strong)}
+.session-item.exited{opacity:.55}
 .session-item .title{font-size:14px;font-weight:500;line-height:1.35;display:flex;align-items:center;gap:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .session-item .title .dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
 .session-item .title .dot.active{background:var(--green);box-shadow:0 0 0 2px color-mix(in srgb,var(--green) 20%,transparent)}
@@ -292,14 +294,17 @@ button,input,textarea,select{font-family:inherit;font-size:inherit}
 .token-list-item .actions button:hover{background:var(--bg-hover)}
 .token-list-item .actions button.revoke:hover{border-color:var(--red);color:var(--red);background:rgba(239,68,68,.08)}
 
-/* New / Resume session modal */
-.conv-list{max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:10px;background:var(--bg)}
-.conv-item{display:flex;align-items:center;gap:8px;padding:10px 12px;cursor:pointer;border-bottom:1px solid var(--border)}
-.conv-item:last-child{border-bottom:none}
-.conv-item:hover{background:var(--bg-hover)}
-.conv-item.selected{background:var(--bg-active)}
-.conv-item .conv-title{flex:1;min-width:0;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.conv-item .conv-time{font-size:11px;color:var(--fg-tertiary);flex-shrink:0}
+/* Resume conversation panel */
+#resume-status{font-size:13px;color:var(--fg-tertiary);text-align:center;margin:0 0 10px}
+#resume-status:empty{display:none}
+.resume-list{max-height:50vh;overflow-y:auto}
+.resume-device{display:flex;align-items:center;gap:6px;padding:12px 4px 4px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--fg-tertiary)}
+.resume-device .count{font-weight:400}
+.resume-project{padding:8px 4px 2px;font-size:12px;font-weight:600;color:var(--fg-secondary)}
+.resume-item{display:flex;align-items:center;gap:8px;padding:8px 10px;margin-left:10px;border-radius:8px;cursor:pointer}
+.resume-item:hover{background:var(--bg-hover)}
+.resume-item .conv-title{flex:1;min-width:0;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.resume-item .conv-time{font-size:11px;color:var(--fg-tertiary);flex-shrink:0}
 select.modal-input{margin-bottom:0}
 
 .hidden{display:none}
@@ -356,7 +361,7 @@ select.modal-input{margin-bottom:0}
     <div class="sidebar-search">
       <input id="session-search" type="text" placeholder="Search sessions...">
     </div>
-    <div class="sidebar-section-title"><span>Sessions <span id="scount" style="color:var(--fg-tertiary);font-weight:400">0</span></span><button class="new-session-btn" id="open-spawn-modal">+ New / Resume</button><button class="clear-sessions-btn" id="clear-sessions-btn" title="Delete all sessions from the server">Clear</button></div>
+    <div class="sidebar-section-title"><span>Sessions <span id="scount" style="color:var(--fg-tertiary);font-weight:400">0</span></span><button class="new-session-btn" id="open-new-modal">+ New</button><button class="new-session-btn" id="open-resume-modal">Resume</button><button class="clear-sessions-btn" id="clear-sessions-btn" title="Delete all sessions from the server">Clear</button></div>
     <div class="session-list" id="slist"><div class="empty">No sessions yet</div></div>
 
     <div class="sidebar-panels">
@@ -433,29 +438,44 @@ select.modal-input{margin-bottom:0}
   </div>
 </div>
 
-<!-- New / Resume Session Modal -->
-<div class="modal-overlay" id="spawn-modal">
+<!-- New Session Modal -->
+<div class="modal-overlay" id="new-modal">
   <div class="modal">
     <div class="modal-header">
-      <h2>New / Resume Session</h2>
-      <button class="modal-close" id="close-spawn-modal">×</button>
+      <h2>New Session</h2>
+      <button class="modal-close" id="close-new-modal">×</button>
     </div>
     <div class="modal-body">
-      <div class="modal-section">
-        <h3>Directory</h3>
-        <input id="spawn-cwd" class="modal-input" type="text" list="spawn-cwd-list" placeholder="Working directory, e.g. /Users/me/project">
-        <datalist id="spawn-cwd-list"></datalist>
+      <div class="modal-section" id="new-device-row">
+        <h3>Device</h3>
+        <select id="new-device" class="modal-input"></select>
       </div>
       <div class="modal-section">
-        <h3>Conversation</h3>
-        <div id="spawn-conv-list" class="conv-list"></div>
+        <h3>Directory</h3>
+        <input id="new-cwd" class="modal-input" type="text" list="new-cwd-list" placeholder="Working directory, e.g. /Users/me/project">
+        <datalist id="new-cwd-list"></datalist>
       </div>
       <div class="modal-section">
         <h3>Profile</h3>
-        <select id="spawn-profile" class="modal-input"></select>
+        <select id="new-profile" class="modal-input"></select>
       </div>
-      <button id="spawn-submit" class="modal-btn" disabled>Start</button>
-      <p class="error" id="spawn-error" style="text-align:center;margin-top:10px"></p>
+      <button id="new-submit" class="modal-btn" disabled>Start</button>
+      <p class="error" id="new-error" style="text-align:center;margin-top:10px"></p>
+    </div>
+  </div>
+</div>
+
+<!-- Resume Conversation Modal -->
+<div class="modal-overlay" id="resume-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>Resume Conversation</h2>
+      <button class="modal-close" id="close-resume-modal">×</button>
+    </div>
+    <div class="modal-body">
+      <input id="resume-search" class="modal-input" type="text" placeholder="Search title, directory or session id...">
+      <p id="resume-status"></p>
+      <div id="resume-list" class="resume-list"></div>
     </div>
   </div>
 </div>

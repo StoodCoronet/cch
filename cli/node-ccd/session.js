@@ -81,10 +81,18 @@ function findLatestJsonl(cwd, includeFile) {
 // Derive a conversation title from a jsonl transcript: the last custom-title
 // (/rename) or summary line wins; otherwise fall back to the first plain-text
 // user message (slash-command wrappers excluded), truncated to 60 chars.
-function readConversationTitle(jsonlPath) {
+// maxBytes caps how much of the file head is read (used by the cross-project
+// scan on huge transcripts); with a cap, "last title line" degrades to "last
+// title line within the head".
+function readConversationTitle(jsonlPath, maxBytes = Infinity) {
     let content;
     try {
-        content = fs.readFileSync(jsonlPath, 'utf-8');
+        const size = Math.min(fs.statSync(jsonlPath).size, maxBytes);
+        const fd = fs.openSync(jsonlPath, 'r');
+        const buf = Buffer.alloc(size);
+        fs.readSync(fd, buf, 0, size, 0);
+        fs.closeSync(fd);
+        content = buf.toString('utf-8');
     } catch (e) {
         return null;
     }
@@ -149,6 +157,81 @@ function listConversations(cwd) {
     }
     conversations.sort((a, b) => b.updatedAt - a.updatedAt);
     return conversations.slice(0, 50);
+}
+
+// Recover the cwd of a conversation from its jsonl content. The project dir
+// slug is not reversible (hyphens are ambiguous), so the "cwd" field present
+// on user/system message lines is the only reliable source. Reads the first
+// 8KB only; returns null when no cwd clue is found.
+function readConversationCwd(jsonlPath) {
+    let head;
+    try {
+        const fd = fs.openSync(jsonlPath, 'r');
+        const buf = Buffer.alloc(8192);
+        const n = fs.readSync(fd, buf, 0, buf.length, 0);
+        fs.closeSync(fd);
+        head = buf.toString('utf-8', 0, n);
+    } catch (e) {
+        return null;
+    }
+    const m = head.match(/"cwd":"((?:[^"\\]|\\.)*)"/);
+    if (!m) return null;
+    try {
+        return JSON.parse(`"${m[1]}"`);
+    } catch (e) {
+        return null;
+    }
+}
+
+// List claude conversations across ALL project directories. Returns
+// [{claudeSessionId, title, cwd, updatedAt}] sorted by updatedAt desc,
+// max 100. Bounded to ~5s of scanning; on timeout the partial result is
+// returned. Files without a cwd clue are skipped.
+function listAllConversations() {
+    const deadline = Date.now() + 5000;
+    const conversations = [];
+    let entries = [];
+    try {
+        entries = fs.readdirSync(getClaudeProjectsDir());
+    } catch (e) {
+        return [];
+    }
+    for (const entry of entries) {
+        if (Date.now() > deadline) break;
+        const projDir = path.join(getClaudeProjectsDir(), entry);
+        let files;
+        try {
+            if (!fs.statSync(projDir).isDirectory()) continue;
+            files = fs.readdirSync(projDir);
+        } catch (e) {
+            continue;
+        }
+        for (const f of files) {
+            if (!f.endsWith('.jsonl')) continue;
+            if (Date.now() > deadline) break;
+            const jsonlPath = path.join(projDir, f);
+            let stat;
+            try {
+                stat = fs.statSync(jsonlPath);
+            } catch (e) {
+                continue;
+            }
+            const cwd = readConversationCwd(jsonlPath);
+            if (!cwd) continue;
+            // Huge transcripts: only the head is read for title clues (the
+            // last custom-title/summary may be missed, falling back to the
+            // first user message — acceptable for a listing).
+            const maxBytes = stat.size > 1024 * 1024 ? 64 * 1024 : Infinity;
+            conversations.push({
+                claudeSessionId: path.basename(f, '.jsonl'),
+                title: readConversationTitle(jsonlPath, maxBytes),
+                cwd,
+                updatedAt: stat.mtimeMs,
+            });
+        }
+    }
+    conversations.sort((a, b) => b.updatedAt - a.updatedAt);
+    return conversations.slice(0, 100);
 }
 
 function truncateForDisplay(s, maxLen) {
@@ -362,6 +445,7 @@ module.exports = {
     getProjectDirName,
     findLatestJsonl,
     listConversations,
+    listAllConversations,
     extractMessageParts,
     truncateForDisplay,
 };

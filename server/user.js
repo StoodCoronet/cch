@@ -115,7 +115,8 @@ $("connect-modal").onclick = function(e) {
 document.addEventListener("keydown", function(e) {
     if (e.key !== "Escape") return;
     if ($("connect-modal").classList.contains("open")) closeModal();
-    if ($("spawn-modal").classList.contains("open")) closeSpawnModal();
+    if ($("new-modal").classList.contains("open")) closeNewModal();
+    if ($("resume-modal").classList.contains("open")) closeResumeModal();
 });
 
 // Search
@@ -131,12 +132,27 @@ function closeSidebar() {
     $("sidebar").classList.remove("open");
 }
 
+// Dismissed sessions are hidden from the sidebar via the "dismissed-sessions"
+// KV record (a JSON array of sessionIds). Session.active is an online
+// indicator (flips false after 10min idle), so the list itself is unfiltered.
+function getDismissedSessions() {
+    return kvGet("dismissed-sessions").then(function(raw) {
+        var dismissed = [];
+        try { dismissed = JSON.parse(raw || "[]"); } catch (e) { dismissed = []; }
+        return Array.isArray(dismissed) ? dismissed : [];
+    });
+}
+
 function loadSessions() {
-    return api("GET", "/v1/sessions").then(function(data) {
-        console.log("loadSessions response:", data);
-        allSessions = data.sessions || [];
-        $("scount").textContent = allSessions.length;
-        renderSessions(allSessions);
+    return getDismissedSessions().then(function(dismissed) {
+        return api("GET", "/v1/sessions").then(function(data) {
+            console.log("loadSessions response:", data);
+            allSessions = (data.sessions || []).filter(function(s) {
+                return dismissed.indexOf(s.id) === -1;
+            });
+            $("scount").textContent = allSessions.length;
+            renderSessions(allSessions);
+        });
     }).catch(function(e) { console.error("loadSessions error:", e); });
 }
 
@@ -182,7 +198,8 @@ function groupLastActive(g) {
 
 function renderSessionItem(s) {
     var el = document.createElement("div");
-    el.className = "session-item" + (s.id === currentSessionId ? " selected" : "");
+    var st = sessionStates[s.id];
+    el.className = "session-item" + (s.id === currentSessionId ? " selected" : "") + (st && st.state === "exited" ? " exited" : "");
     var meta = sessionMeta[s.id] || {};
     var title = (meta.title || s.tag || s.id.slice(0, 10)).replace(/[&<>]/g, "");
     var device = meta.deviceName || s.machineName || "";
@@ -196,7 +213,7 @@ function renderSessionItem(s) {
             '<span>' + (s.msgCount || 0) + ' msgs</span>' +
             '<span>·</span>' +
             '<span>' + ago(s.activeAt) + '</span>' +
-            '<button class="delete-btn" onclick="deleteSession(\'' + s.id.replace(/'/g, "\\'") + '\', event)">×</button>' +
+            '<button class="delete-btn" onclick="dismissSession(\'' + s.id.replace(/'/g, "\\'") + '\', event)">×</button>' +
         '</div>';
     el.onclick = function() { selectSession(s); closeSidebar(); };
     return el;
@@ -249,6 +266,8 @@ function clearAllSessions() {
     if (!n) return;
     if (!confirm("Delete all " + n + " sessions from the server? Local conversations on your devices are NOT affected. Running sessions will reappear if their host posts again.")) return;
     api("DELETE", "/v1/sessions").then(function(res) {
+        // Rows are gone, so the dismiss records are meaningless — reset them.
+        kvPut("dismissed-sessions", "[]");
         closeTerminal(true);
         currentSessionId = null;
         currentSession = null;
@@ -307,10 +326,17 @@ function selectSession(s) {
     loadMessages();
 }
 
-function deleteSession(id, event) {
+// Dismiss a session from the sidebar. The server record is kept on purpose —
+// permanent row deletion is what the Clear button does.
+function dismissSession(id, event) {
     if (event) { event.stopPropagation(); event.preventDefault(); }
-    if (!confirm("Delete this session? It will reappear if the host restarts claude.")) return;
-    api("DELETE", "/v1/sessions/" + id).then(function() {
+    if (!confirm("Dismiss this session from the sidebar? The server record is kept — use Clear to delete it permanently.")) return;
+    getDismissedSessions().then(function(dismissed) {
+        if (dismissed.indexOf(id) === -1) dismissed.push(id);
+        return kvPut("dismissed-sessions", JSON.stringify(dismissed));
+    }).then(function() {
+        allSessions = allSessions.filter(function(s) { return s.id !== id; });
+        $("scount").textContent = allSessions.length;
         if (currentSessionId === id) {
             closeTerminal(true);
             currentSessionId = null;
@@ -323,7 +349,7 @@ function deleteSession(id, event) {
             setTermState(null);
             $("placeholder").classList.remove("hidden");
         }
-        loadSessions();
+        renderSessions(allSessions);
     }).catch(function(e) { alert(e.message); });
 }
 
@@ -377,6 +403,7 @@ function applySessionState(sessionId, state, exitCode) {
     if (!sessionId || !state) return;
     sessionStates[sessionId] = { state: state, exitCode: exitCode };
     if (sessionId === currentSessionId) setTermState(state, exitCode);
+    renderSessions(allSessions); // exited sessions render greyed in the sidebar
 }
 
 function loadMessages() {
@@ -983,14 +1010,15 @@ function copyForNode(conn) {
     return "node index.js connect " + shellQuote(conn) + " && node index.js";
 }
 
-// ===== New / Resume session modal (daemon RPC over the ccd:rpc relay) =====
+// ===== Session spawn modals (daemon RPC over the ccd:rpc relay) =====
 
 var rpcSeq = 0;
-var rpcPending = {};        // reqId -> {resolve, reject}
-var spawnConversations = [];// conversations for the current cwd
-var spawnSelectedConv = null; // claudeSessionId to resume, or null = new session
+var rpcPending = {};      // reqId -> {resolve, reject}
+var newDevices = [];      // online machine ids probed for the New modal
+var resumeData = [];      // [{machineId, conversations: [...]}]
+var resumeBusy = false;   // a resume spawn is in flight
 
-function ccdRpc(method, params) {
+function ccdRpc(method, params, machineId) {
     return new Promise(function(resolve, reject) {
         if (!socket || !socket.connected) {
             reject(new Error("no daemon online"));
@@ -998,7 +1026,9 @@ function ccdRpc(method, params) {
         }
         var reqId = "rpc-" + Date.now() + "-" + (++rpcSeq) + "-" + Math.random().toString(36).slice(2, 8);
         rpcPending[reqId] = { resolve: resolve, reject: reject };
-        socket.emit("ccd:rpc", { reqId: reqId, method: method, params: params || {} });
+        var payload = { reqId: reqId, method: method, params: params || {} };
+        if (machineId) payload.machineId = machineId; // top-level, per relay protocol
+        socket.emit("ccd:rpc", payload);
         // The server answers with an error after 30s when no daemon responds.
     });
 }
@@ -1021,28 +1051,125 @@ function spawnErrorText(e) {
     return msg;
 }
 
-function openSpawnModal() {
-    $("spawn-modal").classList.add("open");
-    $("spawn-error").textContent = "";
-    spawnConversations = [];
-    spawnSelectedConv = null;
-    renderSpawnConversations();
-    var meta = sessionMeta[currentSessionId] || {};
-    $("spawn-cwd").value = meta.cwd || "";
-    loadSpawnData();
-    if ($("spawn-cwd").value.trim()) loadSpawnConversations();
-    updateSpawnSubmit();
-    $("spawn-cwd").focus();
+// Profile memory: GET/PUT /v1/kv/:key, values are plain profile-name strings.
+function kvGet(key) {
+    return api("GET", "/v1/kv/" + encodeURIComponent(key))
+        .then(function(d) { return (d && d.value) || null; })
+        .catch(function() { return null; });
+}
+function kvPut(key, value) {
+    return api("PUT", "/v1/kv/" + encodeURIComponent(key), { value: value })
+        .catch(function(e) { console.error("kvPut", key, e); });
 }
 
-function closeSpawnModal() {
-    $("spawn-modal").classList.remove("open");
+function projectLabel(cwd) {
+    if (!cwd) return "unknown";
+    var parts = String(cwd).split("/").filter(Boolean);
+    return parts.length ? parts[parts.length - 1] : cwd;
 }
 
-function loadSpawnData() {
-    ccdRpc("list-profiles").then(function(res) {
+// After a successful spawn: refresh the sidebar and open the new session.
+function openSpawnedSession(sid) {
+    if (!sid) return;
+    loadSessions().then(function() {
+        var found = null;
+        allSessions.forEach(function(x) { if (x.id === sid) found = x; });
+        // The daemon may not have created the server session yet; fall back
+        // to a minimal record so the view still opens.
+        selectSession(found || { id: sid, tag: null, createdAt: Date.now(), activeAt: Date.now(), msgCount: 0 });
+    });
+}
+
+// List machines and probe each daemon with list-sessions; resolves to the
+// ids of machines whose daemon answered (offline ones are dropped).
+function probeOnlineDevices() {
+    return api("GET", "/v1/machines").then(function(data) {
+        var ms = Array.isArray(data) ? data : (data.machines || []);
+        return Promise.all(ms.map(function(m) {
+            return ccdRpc("list-sessions", {}, m.id)
+                .then(function() { return m.id; })
+                .catch(function() { return null; });
+        }));
+    }).then(function(ids) {
+        return ids.filter(Boolean);
+    });
+}
+
+// ----- New session modal -----
+
+function openNewModal() {
+    $("new-modal").classList.add("open");
+    $("new-error").textContent = "";
+    $("new-cwd").value = "";
+    $("new-profile").innerHTML = "";
+    $("new-cwd-list").innerHTML = "";
+    $("new-device").innerHTML = '<option value="">Loading devices...</option>';
+    $("new-device-row").classList.remove("hidden");
+    newDevices = [];
+    updateNewSubmit();
+    loadNewDevices();
+    $("new-cwd").focus();
+}
+
+function closeNewModal() {
+    $("new-modal").classList.remove("open");
+}
+
+function loadNewDevices() {
+    probeOnlineDevices().then(function(online) {
+        newDevices = online;
+        var sel = $("new-device");
+        if (!online.length) {
+            sel.innerHTML = "";
+            $("new-error").textContent = "No daemon online — connect a device first";
+            return;
+        }
+        if (online.length === 1) {
+            // A single online device is used implicitly; hide the dropdown.
+            $("new-device-row").classList.add("hidden");
+            selectNewDevice(online[0]);
+            return;
+        }
+        sel.innerHTML = "";
+        online.forEach(function(id) {
+            var opt = document.createElement("option");
+            opt.value = id;
+            opt.textContent = id;
+            sel.appendChild(opt);
+        });
+        selectNewDevice(sel.value);
+    }).catch(function(e) {
+        $("new-device").innerHTML = "";
+        $("new-error").textContent = spawnErrorText(e);
+    });
+}
+
+function currentNewDevice() {
+    if (newDevices.length === 1) return newDevices[0];
+    return $("new-device").value || null;
+}
+
+function selectNewDevice(machineId) {
+    if (!machineId) return;
+    // Common directories = unique cwds of this device's sessions
+    ccdRpc("list-sessions", {}, machineId).then(function(res) {
+        var sessions = (res && res.sessions) || [];
+        var seen = {};
+        var list = $("new-cwd-list");
+        list.innerHTML = "";
+        sessions.forEach(function(s) {
+            if (!s.cwd || seen[s.cwd]) return;
+            seen[s.cwd] = true;
+            var opt = document.createElement("option");
+            opt.value = s.cwd;
+            list.appendChild(opt);
+        });
+    }).catch(function(e) {
+        $("new-error").textContent = spawnErrorText(e);
+    });
+    ccdRpc("list-profiles", {}, machineId).then(function(res) {
         var profiles = (res && res.profiles) || [];
-        var sel = $("spawn-profile");
+        var sel = $("new-profile");
         sel.innerHTML = "";
         profiles.forEach(function(p) {
             var opt = document.createElement("option");
@@ -1057,109 +1184,190 @@ function loadSpawnData() {
             opt.textContent = "(no profiles)";
             sel.appendChild(opt);
         }
-        updateSpawnSubmit();
-    }).catch(function(e) {
-        $("spawn-error").textContent = spawnErrorText(e);
-    });
-    ccdRpc("list-sessions").then(function(res) {
-        var sessions = (res && res.sessions) || [];
-        var seen = {};
-        var list = $("spawn-cwd-list");
-        list.innerHTML = "";
-        sessions.forEach(function(s) {
-            if (!s.cwd || seen[s.cwd]) return;
-            seen[s.cwd] = true;
-            var opt = document.createElement("option");
-            opt.value = s.cwd;
-            list.appendChild(opt);
+        updateNewSubmit();
+        // Default to the last used profile when this device offers it
+        kvGet("profile:last").then(function(last) {
+            if (!last) return;
+            for (var i = 0; i < sel.options.length; i++) {
+                if (sel.options[i].value === last) { sel.value = last; break; }
+            }
+            updateNewSubmit();
         });
     }).catch(function(e) {
-        $("spawn-error").textContent = spawnErrorText(e);
+        $("new-error").textContent = spawnErrorText(e);
     });
 }
 
-function loadSpawnConversations() {
-    var cwd = $("spawn-cwd").value.trim();
-    spawnConversations = [];
-    spawnSelectedConv = null;
-    updateSpawnSubmit();
-    var box = $("spawn-conv-list");
-    if (!cwd) { renderSpawnConversations(); return; }
-    box.innerHTML = '<div class="empty">Loading conversations...</div>';
-    ccdRpc("list-conversations", { cwd: cwd }).then(function(res) {
-        spawnConversations = (res && res.conversations) || [];
-        renderSpawnConversations();
+function updateNewSubmit() {
+    var btn = $("new-submit");
+    if (btn.textContent === "Starting...") return; // submit in flight
+    btn.disabled = !currentNewDevice() || !$("new-cwd").value.trim() || !$("new-profile").value;
+}
+
+function submitNew() {
+    var machineId = currentNewDevice();
+    var cwd = $("new-cwd").value.trim();
+    var profileName = $("new-profile").value;
+    if (!machineId || !cwd || !profileName) return;
+    var btn = $("new-submit");
+    btn.disabled = true;
+    btn.textContent = "Starting...";
+    ccdRpc("spawn", { cwd: cwd, profileName: profileName }, machineId).then(function(res) {
+        kvPut("profile:last", profileName);
+        closeNewModal();
+        openSpawnedSession(res && res.sessionId);
     }).catch(function(e) {
-        box.innerHTML = '<div class="empty">' + esc(spawnErrorText(e)) + '</div>';
+        $("new-error").textContent = spawnErrorText(e);
+    }).then(function() {
+        btn.textContent = "Start";
+        updateNewSubmit();
     });
 }
 
-function renderSpawnConversations() {
-    var box = $("spawn-conv-list");
+// ----- Resume conversation panel -----
+
+function openResumeModal() {
+    $("resume-modal").classList.add("open");
+    $("resume-search").value = "";
+    resumeData = [];
+    $("resume-list").innerHTML = "";
+    setResumeStatus("Loading devices...");
+    loadResumeData();
+    $("resume-search").focus();
+}
+
+function closeResumeModal() {
+    $("resume-modal").classList.remove("open");
+}
+
+function setResumeStatus(text) {
+    $("resume-status").textContent = text;
+}
+
+function loadResumeData() {
+    probeOnlineDevices().then(function(online) {
+        if (!online.length) { setResumeStatus("No devices online"); return; }
+        setResumeStatus("Loading conversations...");
+        return Promise.all(online.map(function(id) {
+            return ccdRpc("list-all-conversations", {}, id).then(function(res) {
+                return { machineId: id, conversations: (res && res.conversations) || [] };
+            }).catch(function() { return { machineId: id, conversations: [] }; });
+        })).then(function(rows) {
+            resumeData = rows;
+            var total = 0;
+            rows.forEach(function(r) { total += r.conversations.length; });
+            setResumeStatus(total ? "" : "No conversations found");
+            renderResumeList();
+        });
+    }).catch(function(e) {
+        setResumeStatus(spawnErrorText(e));
+    });
+}
+
+function convTime(c) {
+    var t = typeof c.updatedAt === "number" ? c.updatedAt : Date.parse(c.updatedAt);
+    return isNaN(t) ? 0 : t;
+}
+
+function renderResumeList() {
+    var q = $("resume-search").value.trim().toLowerCase();
+    var box = $("resume-list");
     box.innerHTML = "";
-    var items = [{ claudeSessionId: null }].concat(spawnConversations);
-    items.forEach(function(c) {
-        var el = document.createElement("div");
-        el.className = "conv-item" + (c.claudeSessionId === spawnSelectedConv ? " selected" : "");
-        var title;
-        if (c.claudeSessionId === null) {
-            title = "✚ New session";
-        } else {
-            title = c.title || c.claudeSessionId.slice(0, 8);
-        }
-        var updatedAt = typeof c.updatedAt === "number" ? c.updatedAt : Date.parse(c.updatedAt);
-        el.innerHTML =
-            '<span class="conv-title">' + esc(title) + '</span>' +
-            (updatedAt ? '<span class="conv-time">' + esc(ago(updatedAt)) + '</span>' : '');
-        el.onclick = function() {
-            spawnSelectedConv = c.claudeSessionId;
-            renderSpawnConversations();
-            updateSpawnSubmit();
-        };
-        box.appendChild(el);
-    });
-}
-
-function updateSpawnSubmit() {
-    var btn = $("spawn-submit");
-    btn.disabled = !$("spawn-cwd").value.trim() || !$("spawn-profile").value;
-    btn.textContent = spawnSelectedConv ? "Resume" : "Start";
-}
-
-function submitSpawn() {
-    var cwd = $("spawn-cwd").value.trim();
-    var profileName = $("spawn-profile").value;
-    if (!cwd || !profileName) return;
-    var params = { cwd: cwd, profileName: profileName };
-    if (spawnSelectedConv) params.resumeId = spawnSelectedConv;
-    closeSpawnModal();
-    $("term-state-text").textContent = "starting...";
-    ccdRpc("spawn", params).then(function(res) {
-        if ($("term-state-text").textContent === "starting...") $("term-state-text").textContent = "";
-        var sid = res && res.sessionId;
-        if (!sid) return;
-        loadSessions().then(function() {
-            var found = null;
-            allSessions.forEach(function(x) { if (x.id === sid) found = x; });
-            // The daemon may not have created the server session yet; fall
-            // back to a minimal record so the view still opens.
-            selectSession(found || { id: sid, tag: null, createdAt: Date.now(), activeAt: Date.now(), msgCount: 0 });
+    resumeData.forEach(function(dev) {
+        var matches = dev.conversations.filter(function(c) {
+            if (!q) return true;
+            var hay = ((c.title || "") + " " + (c.cwd || "") + " " + (c.claudeSessionId || "")).toLowerCase();
+            return hay.indexOf(q) !== -1;
         });
+        if (!matches.length) return;
+        var devHead = document.createElement("div");
+        devHead.className = "resume-device";
+        devHead.innerHTML = '<span>' + esc(dev.machineId) + '</span><span class="count">' + matches.length + '</span>';
+        box.appendChild(devHead);
+        // Second level: group by project (cwd last segment)
+        var groups = {};
+        var order = [];
+        matches.forEach(function(c) {
+            var proj = projectLabel(c.cwd);
+            if (!groups[proj]) { groups[proj] = []; order.push(proj); }
+            groups[proj].push(c);
+        });
+        order.sort(function(a, b) {
+            var ta = 0, tb = 0;
+            groups[a].forEach(function(c) { if (convTime(c) > ta) ta = convTime(c); });
+            groups[b].forEach(function(c) { if (convTime(c) > tb) tb = convTime(c); });
+            return tb - ta;
+        });
+        order.forEach(function(proj) {
+            var items = groups[proj];
+            items.sort(function(a, b) { return convTime(b) - convTime(a); });
+            var pHead = document.createElement("div");
+            pHead.className = "resume-project";
+            pHead.textContent = proj;
+            box.appendChild(pHead);
+            items.forEach(function(c) {
+                var el = document.createElement("div");
+                el.className = "resume-item";
+                var t = convTime(c);
+                el.innerHTML =
+                    '<span class="conv-title">' + esc(c.title || (c.claudeSessionId || "").slice(0, 8)) + '</span>' +
+                    (t ? '<span class="conv-time">' + esc(ago(t)) + '</span>' : '');
+                el.onclick = function() { resumeConversation(dev.machineId, c); };
+                box.appendChild(el);
+            });
+        });
+    });
+    if (!box.children.length && resumeData.length && !q && !$("resume-status").textContent) {
+        setResumeStatus("No conversations found");
+    } else if (!box.children.length && q) {
+        setResumeStatus("No matching conversations");
+    } else if (box.children.length && $("resume-status").textContent === "No matching conversations") {
+        setResumeStatus("");
+    }
+}
+
+function resumeConversation(machineId, conv) {
+    if (resumeBusy) return;
+    resumeBusy = true;
+    setResumeStatus("Starting...");
+    var id = conv.claudeSessionId;
+    // Profile preference: per-conversation memory, then last used, then default
+    kvGet("profile:conv:" + id).then(function(v) {
+        if (v) return v;
+        return kvGet("profile:last").then(function(v2) { return v2 || "default"; });
+    }).then(function(profileName) {
+        return ccdRpc("spawn", { cwd: conv.cwd, profileName: profileName, resumeId: id }, machineId)
+            .then(function(res) {
+                kvPut("profile:conv:" + id, profileName);
+                kvPut("profile:last", profileName);
+                return res;
+            });
+    }).then(function(res) {
+        resumeBusy = false;
+        closeResumeModal();
+        openSpawnedSession(res && res.sessionId);
     }).catch(function(e) {
-        if ($("term-state-text").textContent === "starting...") $("term-state-text").textContent = "";
-        alert(spawnErrorText(e));
+        resumeBusy = false;
+        setResumeStatus(spawnErrorText(e));
     });
 }
 
-$("open-spawn-modal").onclick = openSpawnModal;
-$("close-spawn-modal").onclick = closeSpawnModal;
-$("spawn-modal").onclick = function(e) {
-    if (e.target === $("spawn-modal")) closeSpawnModal();
+$("open-new-modal").onclick = openNewModal;
+$("close-new-modal").onclick = closeNewModal;
+$("new-modal").onclick = function(e) {
+    if (e.target === $("new-modal")) closeNewModal();
 };
-$("spawn-cwd").addEventListener("change", loadSpawnConversations);
-$("spawn-cwd").addEventListener("input", updateSpawnSubmit);
-$("spawn-profile").onchange = updateSpawnSubmit;
-$("spawn-submit").onclick = submitSpawn;
+$("new-device").onchange = function() { selectNewDevice($("new-device").value); };
+$("new-cwd").addEventListener("input", updateNewSubmit);
+$("new-profile").onchange = updateNewSubmit;
+$("new-submit").onclick = submitNew;
+
+$("open-resume-modal").onclick = openResumeModal;
+$("close-resume-modal").onclick = closeResumeModal;
+$("resume-modal").onclick = function(e) {
+    if (e.target === $("resume-modal")) closeResumeModal();
+};
+$("resume-search").addEventListener("input", renderResumeList);
 
 // Events
 $("connect-btn").onclick = connect;

@@ -17,6 +17,7 @@ const {
     getProjectDirName,
     findLatestJsonl,
     listConversations,
+    listAllConversations,
 } = require('./session');
 const { loadConfig, bootstrap, CONFIG_DIR, PID_FILE, LOG_FILE, SOCK_FILE } = require('./index');
 const { loadProfiles } = require('./tui');
@@ -418,6 +419,9 @@ async function handleRpcMethod(method, params) {
         case 'list-conversations': {
             if (!params.cwd) throw new Error('list-conversations requires cwd');
             return { conversations: listConversations(params.cwd) };
+        }
+        case 'list-all-conversations': {
+            return { conversations: listAllConversations() };
         }
         case 'list-sessions': {
             return { sessions: listSessionsPayload() };
