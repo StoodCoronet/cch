@@ -140,6 +140,68 @@ function loadSessions() {
     }).catch(function(e) { console.error("loadSessions error:", e); });
 }
 
+// Group key for the sidebar: prefer the daemon-reported cwd; otherwise strip
+// the trailing "-<8hex>"/"-pending-<id8>" suffix from the tag to recover the
+// project directory slug.
+function sessionGroup(s) {
+    var meta = sessionMeta[s.id] || {};
+    if (meta.cwd) {
+        var parts = meta.cwd.split("/").filter(Boolean);
+        return { key: "cwd:" + meta.cwd, label: parts.length ? parts[parts.length - 1] : meta.cwd };
+    }
+    var tag = s.tag || "";
+    if (tag) {
+        var slug = tag.replace(/-pending-[^-]+$/i, "").replace(/-[0-9a-f]{8}$/i, "");
+        var segs = slug.split("-").filter(Boolean);
+        var label = segs.length ? segs[segs.length - 1] : slug;
+        // Hyphenated directory names (e.g. "node-ccd") end in a short suffix
+        // segment; fold it back onto the previous one for a readable label.
+        if (label.length <= 3 && segs.length > 1) {
+            label = segs[segs.length - 2] + "-" + label;
+        }
+        return { key: "slug:" + slug, label: label || slug };
+    }
+    return { key: "ungrouped", label: "ungrouped" };
+}
+
+function getCollapsedGroups() {
+    try { return JSON.parse(localStorage.getItem("cch_group_collapsed") || "{}") || {}; } catch (e) { return {}; }
+}
+function toggleGroup(key) {
+    var collapsed = getCollapsedGroups();
+    if (collapsed[key]) delete collapsed[key]; else collapsed[key] = true;
+    localStorage.setItem("cch_group_collapsed", JSON.stringify(collapsed));
+    renderSessions(allSessions);
+}
+
+function groupLastActive(g) {
+    var t = 0;
+    g.items.forEach(function(s) { if ((s.activeAt || 0) > t) t = s.activeAt || 0; });
+    return t;
+}
+
+function renderSessionItem(s) {
+    var el = document.createElement("div");
+    el.className = "session-item" + (s.id === currentSessionId ? " selected" : "");
+    var meta = sessionMeta[s.id] || {};
+    var title = (meta.title || s.tag || s.id.slice(0, 10)).replace(/[&<>]/g, "");
+    var device = meta.deviceName || s.machineName || "";
+    el.innerHTML =
+        '<div class="title">' +
+            '<span class="dot ' + (s.active ? "active" : "idle") + '"></span>' +
+            esc(title) +
+        '</div>' +
+        '<div class="meta">' +
+            (device ? '<span>' + esc(device) + '</span><span>·</span>' : '') +
+            '<span>' + (s.msgCount || 0) + ' msgs</span>' +
+            '<span>·</span>' +
+            '<span>' + ago(s.activeAt) + '</span>' +
+            '<button class="delete-btn" onclick="deleteSession(\'' + s.id.replace(/'/g, "\\'") + '\', event)">×</button>' +
+        '</div>';
+    el.onclick = function() { selectSession(s); closeSidebar(); };
+    return el;
+}
+
 function renderSessions(sessions) {
     var q = $("session-search").value.trim().toLowerCase();
     var filtered = sessions.filter(function(s) {
@@ -148,27 +210,59 @@ function renderSessions(sessions) {
     });
     var div = $("slist");
     div.innerHTML = filtered.length ? "" : '<div class="empty">' + (q ? "No matching sessions" : "No sessions yet") + '</div>';
+    // Searching degrades to a flat list; empty query restores grouping.
+    if (q) {
+        filtered.forEach(function(s) { div.appendChild(renderSessionItem(s)); });
+        return;
+    }
+    var groups = {};
+    var order = [];
     filtered.forEach(function(s) {
-        var el = document.createElement("div");
-        el.className = "session-item" + (s.id === currentSessionId ? " selected" : "");
-        var meta = sessionMeta[s.id] || {};
-        var title = (meta.title || s.tag || s.id.slice(0, 10)).replace(/[&<>]/g, "");
-        var device = meta.deviceName || s.machineName || "";
-        el.innerHTML =
-            '<div class="title">' +
-                '<span class="dot ' + (s.active ? "active" : "idle") + '"></span>' +
-                esc(title) +
-            '</div>' +
-            '<div class="meta">' +
-                (device ? '<span>' + esc(device) + '</span><span>·</span>' : '') +
-                '<span>' + (s.msgCount || 0) + ' msgs</span>' +
-                '<span>·</span>' +
-                '<span>' + ago(s.activeAt) + '</span>' +
-                '<button class="delete-btn" onclick="deleteSession(\'' + s.id.replace(/'/g, "\\'") + '\', event)">×</button>' +
-            '</div>';
-        el.onclick = function() { selectSession(s); closeSidebar(); };
-        div.appendChild(el);
+        var g = sessionGroup(s);
+        if (!groups[g.key]) { groups[g.key] = { label: g.label, items: [] }; order.push(g.key); }
+        groups[g.key].items.push(s);
     });
+    order.sort(function(a, b) {
+        if (a === "ungrouped") return 1;
+        if (b === "ungrouped") return -1;
+        return groupLastActive(groups[b]) - groupLastActive(groups[a]);
+    });
+    var collapsed = getCollapsedGroups();
+    order.forEach(function(key) {
+        var g = groups[key];
+        g.items.sort(function(a, b) { return (b.activeAt || 0) - (a.activeAt || 0); });
+        var head = document.createElement("div");
+        head.className = "group-header" + (collapsed[key] ? " collapsed" : "");
+        head.innerHTML =
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>' +
+            '<span class="group-name" title="' + esc(key) + '">' + esc(g.label) + '</span>' +
+            '<span class="group-count">' + g.items.length + '</span>';
+        head.onclick = function() { toggleGroup(key); };
+        div.appendChild(head);
+        if (collapsed[key]) return;
+        g.items.forEach(function(s) { div.appendChild(renderSessionItem(s)); });
+    });
+}
+
+function clearAllSessions() {
+    var n = allSessions.length;
+    if (!n) return;
+    if (!confirm("Delete all " + n + " sessions from the server? Local conversations on your devices are NOT affected. Running sessions will reappear if their host posts again.")) return;
+    api("DELETE", "/v1/sessions").then(function(res) {
+        closeTerminal(true);
+        currentSessionId = null;
+        currentSession = null;
+        $("messages").classList.add("hidden");
+        $("input-area").classList.add("hidden");
+        $("term-toggle-btn").classList.add("hidden");
+        $("term-title").textContent = "Select a session";
+        $("term-device").textContent = "";
+        setTermState(null);
+        $("placeholder").classList.remove("hidden");
+        loadSessions();
+        var deleted = res && res.deleted != null ? res.deleted : n;
+        $("term-state-text").textContent = "Cleared " + deleted + " sessions";
+    }).catch(function(e) { alert(e.message); });
 }
 
 function loadMachines() {
@@ -1074,6 +1168,7 @@ $("login-btn").onclick = loginWithPassword;
 $("login-password").onkeydown = function(e) { if (e.key === "Enter") loginWithPassword(); };
 $("refresh-btn").onclick = refresh;
 $("logout-btn").onclick = logout;
+$("clear-sessions-btn").onclick = clearAllSessions;
 $("gen-tk-btn").onclick = generateToken;
 $("tk-label").onkeydown = function(e) { if (e.key === "Enter") generateToken(); };
 $("copy-cch-btn").onclick = function() { copyText(copyForCch($("new-conn").textContent)); };

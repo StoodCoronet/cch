@@ -581,4 +581,23 @@ export function sessionRoutes(app: Fastify) {
 
         return reply.send({ success: true });
     });
+
+    // Bulk delete sessions for this account. Server-side records only — the
+    // host's claude conversations (jsonl) and daemon are untouched; a still
+    // running session simply reappears when its daemon next posts.
+    app.delete('/v1/sessions', {
+        preHandler: app.authenticate
+    }, async (request, reply) => {
+        const userId = request.userId;
+        const sessions = await db.session.findMany({
+            where: { accountId: userId },
+            select: { id: true },
+        });
+        let deleted = 0;
+        for (const s of sessions) {
+            if (await sessionDelete({ uid: userId }, s.id)) deleted++;
+        }
+        log({ module: 'session-delete', userId, deleted }, `Bulk deleted ${deleted} sessions`);
+        return reply.send({ success: true, deleted });
+    });
 }
