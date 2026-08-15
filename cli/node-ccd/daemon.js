@@ -148,6 +148,12 @@ async function finalizeServerSession(session) {
         session.serverReady = true;
         sessions.set(sessionId, session);
         console.log(`session ready: ${sessionId} (claude=${session.claudeSessionId || 'unknown'}, profile=${session.profile.name})`);
+        // Bump lastActiveAt/updatedAt so resumed sessions surface in the web
+        // sidebar even before any new message arrives
+        axios.post(`${server}/v1/sessions/${sessionId}/activity`, {}, {
+            headers: { Authorization: `Bearer ${authToken}` },
+            timeout: 10000,
+        }).catch(e => console.error(`activity ping failed: ${e.message}`));
         emitTermRegister(session);
         emitTermMeta(session);
         // Flush buffered PTY output so early claude output reaches the server

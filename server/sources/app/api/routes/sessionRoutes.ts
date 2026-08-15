@@ -516,6 +516,13 @@ export function sessionRoutes(app: Fastify) {
             },
         });
 
+        // Bump session activity so the web sidebar re-orders on new messages
+        // (updatedAt is @updatedAt and moves automatically)
+        await db.session.update({
+            where: { id: request.params.sessionId },
+            data: { lastActiveAt: new Date(), active: true },
+        }).catch(() => {});
+
         // Realtime push to user-scoped connections (webui + ccd bridge)
         const updSeq = await allocateUserSeq(request.userId);
         eventRouter.emitUpdate({
