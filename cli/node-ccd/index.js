@@ -242,7 +242,10 @@ async function cmdPickAttach() {
     await ensureDaemon();
     const list = await ipcCall({ cmd: 'list' });
     const picked = await pickSession(list.sessions || []);
-    if (!picked) return;
+    if (!picked) {
+        console.log('cancelled');
+        return;
+    }
     if (picked.state === 'running') {
         const result = await attach(picked.sessionId);
         if (result === 'detached') {
@@ -255,12 +258,16 @@ async function cmdPickAttach() {
         console.error('cannot resume: no claude session id');
         process.exit(1);
     }
+    // Let the user pick which API profile to resume with (the original session
+    // may have relied on claude's own login, which can be expired). Preselect
+    // the session's original profile. Bypass the PROFILE env passthrough:
+    // this is an explicit choice, not the default launch flow.
     const profiles = loadProfiles();
-    const profile = profiles.find(p => p.name === picked.profile);
-    if (!profile) {
-        console.error(`cannot resume: profile '${picked.profile}' not found. Available: ${profiles.map(p => p.name).join(', ') || '(none)'}`);
-        process.exit(1);
-    }
+    const savedProfileEnv = process.env.PROFILE;
+    delete process.env.PROFILE;
+    const profile = await pickProfileTUI(profiles, picked.profile);
+    if (savedProfileEnv !== undefined) process.env.PROFILE = savedProfileEnv;
+    console.log(`selected profile: ${profile.name}`);
     const resp = await ipcCall({
         cmd: 'spawn',
         profile,
@@ -334,6 +341,7 @@ async function cmdDefault() {
     await ensureDaemon();
     const profiles = loadProfiles();
     const profile = await pickProfileTUI(profiles);
+    console.log(`selected profile: ${profile.name}`);
     const resp = await ipcCall({
         cmd: 'spawn',
         profile,
@@ -349,6 +357,8 @@ async function cmdDefault() {
     const result = await attach(resp.sessionId);
     if (result === 'detached') {
         console.log(`\ndetached; session still running, re-attach: node index.js attach ${resp.sessionId}`);
+    } else {
+        console.log('session ended');
     }
 }
 

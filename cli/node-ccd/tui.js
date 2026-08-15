@@ -26,7 +26,7 @@ function loadProfiles() {
     }));
 }
 
-function pickProfileTUI(profiles) {
+function pickProfileTUI(profiles, initialName) {
     return new Promise((resolve, reject) => {
         if (profiles.length === 0) {
             reject(new Error('No profiles found'));
@@ -52,6 +52,17 @@ function pickProfileTUI(profiles) {
         const backends = ['claude', 'codex', 'kimi'];
         let activeBackend = 0;
         let selected = 0;
+        // Preselect the named profile: switch to its backend tab and select it
+        // within that group, so resuming a session defaults to its profile.
+        if (initialName) {
+            const initial = profiles.find(p => p.name === initialName);
+            if (initial) {
+                const b = backends.indexOf(initial.backend);
+                if (b >= 0) activeBackend = b;
+                const idx = profiles.filter(p => p.backend === backends[activeBackend]).indexOf(initial);
+                if (idx >= 0) selected = idx;
+            }
+        }
 
         const tabBar = blessed.text({
             top: 0,
@@ -243,6 +254,7 @@ function pickProfileTUI(profiles) {
 
         screen.key(['q', 'C-c'], () => {
             screen.destroy();
+            console.log('cancelled');
             process.exit(0);
         });
 
