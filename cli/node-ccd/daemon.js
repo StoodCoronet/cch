@@ -335,6 +335,41 @@ function listSessionsPayload() {
 }
 
 // --- Socket.IO to server ---
+// Register this machine so GET /v1/machines shows it to the web. Retries a
+// few times but never blocks daemon startup.
+async function registerMachine() {
+    let lastErr = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+            await axios.post(`${server}/v1/machines`, {
+                id: hostname,
+                metadata: hostname,
+            }, {
+                headers: { Authorization: `Bearer ${authToken}` },
+                timeout: 10000,
+            });
+            console.log(`machine registered: ${hostname}`);
+            return;
+        } catch (e) {
+            lastErr = e;
+            console.error(`registerMachine attempt ${attempt + 1} failed: ${e.message}`);
+            await new Promise(r => setTimeout(r, 2000));
+        }
+    }
+    console.error(`registerMachine gave up; machine will not appear in /v1/machines: ${lastErr.message}`);
+}
+
+// Heartbeat: the server marks a machine offline after 10 min without
+// machine-alive, so emit every 60s while the socket is connected.
+let heartbeatTimer = null;
+function startHeartbeat() {
+    heartbeatTimer = setInterval(() => {
+        if (!socket || !socket.connected) return;
+        socket.emit('machine-alive', { machineId: hostname, time: Date.now() });
+        console.log('machine-alive sent');
+    }, 60000);
+}
+
 function connectServer() {
     socket = io(server, {
         path: '/v1/updates',
@@ -357,7 +392,6 @@ function connectServer() {
     socket.on('disconnect', (reason) => {
         console.log(`server disconnected: ${reason}`);
     });
-
     socket.on('connect_error', (e) => {
         console.error(`server connect_error: ${e.message}`);
     });
@@ -602,6 +636,7 @@ function startIpc() {
 // --- Shutdown ---
 function shutdown(code) {
     console.log('daemon shutting down');
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
     for (const session of sessions.values()) {
         try { session.pty.kill(); } catch (e) { /* ignore */ }
         if (session.watcher) session.watcher.stop();
@@ -632,9 +667,11 @@ async function main() {
     const config = loadConfig();
     server = config.server;
     authToken = await bootstrap(server, config.token, hostname);
+    await registerMachine();
     console.log(`daemon started (pid ${process.pid}, pty backend: ${getPtyBackendName()})`);
 
     connectServer();
+    startHeartbeat();
     startIpc();
 
     process.on('SIGTERM', () => shutdown(0));
