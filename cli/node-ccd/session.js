@@ -234,6 +234,44 @@ function listAllConversations() {
     return conversations.slice(0, 100);
 }
 
+// Prefix completion for directory paths (shell-tab-style), backing the web
+// New modal's cwd input. Returns up to 20 absolute dir paths whose names
+// start with the basename of prefix; empty/unreadable dirs yield [].
+function listDirectories(prefix) {
+    if (!prefix) return [];
+    let expanded = prefix;
+    if (expanded === '~' || expanded.startsWith('~/')) {
+        expanded = path.join(os.homedir(), expanded.slice(1));
+    }
+    const dir = path.dirname(expanded);
+    const base = path.basename(expanded);
+    let entries;
+    try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (e) {
+        return [];
+    }
+    // Case-sensitive like the shell; hidden dirs only when base starts with '.'
+    const showHidden = base.startsWith('.');
+    const dirs = [];
+    for (const entry of entries) {
+        if (!entry.name.startsWith(base)) continue;
+        if (!showHidden && entry.name.startsWith('.')) continue;
+        let isDir = entry.isDirectory();
+        if (!isDir && entry.isSymbolicLink()) {
+            try {
+                isDir = fs.statSync(path.join(dir, entry.name)).isDirectory();
+            } catch (e) {
+                isDir = false;
+            }
+        }
+        if (!isDir) continue;
+        dirs.push(path.join(dir, entry.name));
+    }
+    dirs.sort();
+    return dirs.slice(0, 20);
+}
+
 function truncateForDisplay(s, maxLen) {
     if (s.length <= maxLen) return s;
     return s.slice(0, maxLen) + '… +' + (s.length - maxLen) + ' chars';
@@ -446,6 +484,7 @@ module.exports = {
     findLatestJsonl,
     listConversations,
     listAllConversations,
+    listDirectories,
     extractMessageParts,
     truncateForDisplay,
 };

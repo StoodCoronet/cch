@@ -307,6 +307,13 @@ button,input,textarea,select{font-family:inherit;font-size:inherit}
 .resume-item .conv-time{font-size:11px;color:var(--fg-tertiary);flex-shrink:0}
 select.modal-input{margin-bottom:0}
 
+/* Directory autocomplete in the New modal */
+.cwd-field{position:relative}
+.cwd-field .modal-input{margin-bottom:0}
+.cwd-suggest{position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:30;max-height:264px;overflow-y:auto;background:var(--bg-elevated);border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow)}
+.cwd-suggest-item{padding:9px 12px;font-size:13px;font-family:"SF Mono","Fira Code",monospace;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cwd-suggest-item:hover,.cwd-suggest-item.active{background:var(--bg-hover)}
+
 .hidden{display:none}
 
 @media (max-width: 768px) {
@@ -452,8 +459,10 @@ select.modal-input{margin-bottom:0}
       </div>
       <div class="modal-section">
         <h3>Directory</h3>
-        <input id="new-cwd" class="modal-input" type="text" list="new-cwd-list" placeholder="Working directory, e.g. /Users/me/project">
-        <datalist id="new-cwd-list"></datalist>
+        <div class="cwd-field">
+          <input id="new-cwd" class="modal-input" type="text" placeholder="Working directory, e.g. /Users/me/project" autocomplete="off">
+          <div id="new-cwd-suggest" class="cwd-suggest hidden"></div>
+        </div>
       </div>
       <div class="modal-section">
         <h3>Profile</h3>

@@ -18,6 +18,7 @@ const {
     findLatestJsonl,
     listConversations,
     listAllConversations,
+    listDirectories,
 } = require('./session');
 const { loadConfig, bootstrap, CONFIG_DIR, PID_FILE, LOG_FILE, SOCK_FILE } = require('./index');
 const { loadProfiles } = require('./tui');
@@ -422,6 +423,9 @@ async function handleRpcMethod(method, params) {
         }
         case 'list-all-conversations': {
             return { conversations: listAllConversations() };
+        }
+        case 'list-directories': {
+            return { dirs: listDirectories(params.prefix || '') };
         }
         case 'list-sessions': {
             return { sessions: listSessionsPayload() };

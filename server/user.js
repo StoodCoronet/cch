@@ -1015,6 +1015,10 @@ function copyForNode(conn) {
 var rpcSeq = 0;
 var rpcPending = {};      // reqId -> {resolve, reject}
 var newDevices = [];      // online machine ids probed for the New modal
+var cwdCommon = [];       // common dirs for the New modal (from list-sessions)
+var cwdSuggestItems = []; // currently shown autocomplete entries
+var cwdSuggestIndex = -1; // keyboard-highlighted entry, -1 = none
+var cwdSuggestTimer = null; // debounce timer for list-directories
 var resumeData = [];      // [{machineId, conversations: [...]}]
 var resumeBusy = false;   // a resume spawn is in flight
 
@@ -1101,8 +1105,9 @@ function openNewModal() {
     $("new-modal").classList.add("open");
     $("new-error").textContent = "";
     $("new-cwd").value = "";
+    cwdCommon = [];
+    hideCwdSuggest();
     $("new-profile").innerHTML = "";
-    $("new-cwd-list").innerHTML = "";
     $("new-device").innerHTML = '<option value="">Loading devices...</option>';
     $("new-device-row").classList.remove("hidden");
     newDevices = [];
@@ -1151,18 +1156,18 @@ function currentNewDevice() {
 
 function selectNewDevice(machineId) {
     if (!machineId) return;
+    // Device switch: drop any stale suggestions
+    hideCwdSuggest();
+    cwdCommon = [];
     // Common directories = unique cwds of this device's sessions
     ccdRpc("list-sessions", {}, machineId).then(function(res) {
         var sessions = (res && res.sessions) || [];
         var seen = {};
-        var list = $("new-cwd-list");
-        list.innerHTML = "";
+        cwdCommon = [];
         sessions.forEach(function(s) {
             if (!s.cwd || seen[s.cwd]) return;
             seen[s.cwd] = true;
-            var opt = document.createElement("option");
-            opt.value = s.cwd;
-            list.appendChild(opt);
+            cwdCommon.push(s.cwd);
         });
     }).catch(function(e) {
         $("new-error").textContent = spawnErrorText(e);
@@ -1223,6 +1228,108 @@ function submitNew() {
         updateNewSubmit();
     });
 }
+
+// ----- Directory autocomplete (list-directories RPC) -----
+
+function hideCwdSuggest() {
+    if (cwdSuggestTimer) { clearTimeout(cwdSuggestTimer); cwdSuggestTimer = null; }
+    cwdSuggestItems = [];
+    cwdSuggestIndex = -1;
+    var box = $("new-cwd-suggest");
+    box.classList.add("hidden");
+    box.innerHTML = "";
+}
+
+function showCwdSuggest(items) {
+    cwdSuggestItems = items || [];
+    cwdSuggestIndex = -1;
+    var box = $("new-cwd-suggest");
+    box.innerHTML = "";
+    if (!cwdSuggestItems.length) { box.classList.add("hidden"); return; }
+    cwdSuggestItems.forEach(function(dir) {
+        var el = document.createElement("div");
+        el.className = "cwd-suggest-item";
+        el.textContent = dir;
+        el.title = dir;
+        // mousedown (not click) + preventDefault: pick before the input blurs
+        el.onmousedown = function(e) { e.preventDefault(); pickCwd(dir); };
+        box.appendChild(el);
+    });
+    box.classList.remove("hidden");
+}
+
+function renderCwdSuggestActive() {
+    var box = $("new-cwd-suggest");
+    var kids = box.children;
+    for (var i = 0; i < kids.length; i++) {
+        kids[i].classList.toggle("active", i === cwdSuggestIndex);
+    }
+    if (cwdSuggestIndex >= 0 && kids[cwdSuggestIndex]) {
+        kids[cwdSuggestIndex].scrollIntoView({ block: "nearest" });
+    }
+}
+
+function pickCwd(dir) {
+    // Programmatic value assignment fires no input event, so picking an entry
+    // does not immediately retrigger completion.
+    $("new-cwd").value = dir;
+    hideCwdSuggest();
+    updateNewSubmit();
+    $("new-cwd").focus();
+}
+
+function scheduleCwdSuggest() {
+    if (cwdSuggestTimer) clearTimeout(cwdSuggestTimer);
+    cwdSuggestTimer = setTimeout(function() {
+        cwdSuggestTimer = null;
+        var text = $("new-cwd").value.trim();
+        if (!text) { showCwdSuggest(cwdCommon); return; }
+        var machineId = currentNewDevice();
+        if (!machineId) { hideCwdSuggest(); return; }
+        ccdRpc("list-directories", { prefix: text }, machineId).then(function(res) {
+            // Drop stale results if the user kept typing meanwhile
+            if ($("new-cwd").value.trim() !== text) return;
+            var dirs = (res && res.dirs) || [];
+            if (dirs.length) showCwdSuggest(dirs); else hideCwdSuggest();
+        }).catch(function() { hideCwdSuggest(); });
+    }, 300);
+}
+
+$("new-cwd").addEventListener("input", function() {
+    updateNewSubmit();
+    scheduleCwdSuggest();
+});
+$("new-cwd").addEventListener("focus", function() {
+    if (!$("new-cwd").value.trim()) showCwdSuggest(cwdCommon);
+});
+$("new-cwd").addEventListener("keydown", function(e) {
+    var open = !$("new-cwd-suggest").classList.contains("hidden");
+    if (e.key === "Escape" && open) {
+        // Close only the dropdown, not the whole modal
+        e.preventDefault();
+        e.stopPropagation();
+        hideCwdSuggest();
+        return;
+    }
+    if (!open) return;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        var n = cwdSuggestItems.length;
+        if (!n) return;
+        cwdSuggestIndex = e.key === "ArrowDown"
+            ? (cwdSuggestIndex + 1) % n
+            : (cwdSuggestIndex - 1 + n) % n;
+        renderCwdSuggestActive();
+    } else if (e.key === "Enter" && cwdSuggestIndex >= 0 && cwdSuggestIndex < cwdSuggestItems.length) {
+        e.preventDefault();
+        pickCwd(cwdSuggestItems[cwdSuggestIndex]);
+    }
+});
+document.addEventListener("mousedown", function(e) {
+    if ($("new-cwd-suggest").classList.contains("hidden")) return;
+    if (e.target.closest && e.target.closest(".cwd-field")) return;
+    hideCwdSuggest();
+});
 
 // ----- Resume conversation panel -----
 
@@ -1358,7 +1465,6 @@ $("new-modal").onclick = function(e) {
     if (e.target === $("new-modal")) closeNewModal();
 };
 $("new-device").onchange = function() { selectNewDevice($("new-device").value); };
-$("new-cwd").addEventListener("input", updateNewSubmit);
 $("new-profile").onchange = updateNewSubmit;
 $("new-submit").onclick = submitNew;
 
