@@ -243,32 +243,57 @@ function listDirectories(prefix) {
     if (expanded === '~' || expanded.startsWith('~/')) {
         expanded = path.join(os.homedir(), expanded.slice(1));
     }
-    const dir = path.dirname(expanded);
-    const base = path.basename(expanded);
-    let entries;
-    try {
-        entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch (e) {
-        return [];
-    }
-    // Case-sensitive like the shell; hidden dirs only when base starts with '.'
-    const showHidden = base.startsWith('.');
-    const dirs = [];
-    for (const entry of entries) {
-        if (!entry.name.startsWith(base)) continue;
-        if (!showHidden && entry.name.startsWith('.')) continue;
-        let isDir = entry.isDirectory();
-        if (!isDir && entry.isSymbolicLink()) {
-            try {
-                isDir = fs.statSync(path.join(dir, entry.name)).isDirectory();
-            } catch (e) {
-                isDir = false;
-            }
+
+    function readDirs(dir, base) {
+        let entries;
+        try {
+            entries = fs.readdirSync(dir, { withFileTypes: true });
+        } catch (e) {
+            return [];
         }
-        if (!isDir) continue;
-        dirs.push(path.join(dir, entry.name));
+        // Case-sensitive like the shell; hidden dirs only when base starts with '.'
+        const showHidden = base.startsWith('.');
+        const dirs = [];
+        for (const entry of entries) {
+            if (!entry.name.startsWith(base)) continue;
+            if (!showHidden && entry.name.startsWith('.')) continue;
+            let isDir = entry.isDirectory();
+            if (!isDir && entry.isSymbolicLink()) {
+                try {
+                    isDir = fs.statSync(path.join(dir, entry.name)).isDirectory();
+                } catch (e) {
+                    isDir = false;
+                }
+            }
+            if (!isDir) continue;
+            dirs.push(path.join(dir, entry.name));
+        }
+        dirs.sort();
+        return dirs;
     }
-    dirs.sort();
+
+    function isExistingDir(p) {
+        try {
+            return fs.statSync(p).isDirectory();
+        } catch (e) {
+            return false;
+        }
+    }
+
+    // VS Code-style: when the typed path is itself a complete directory (or
+    // ends with '/'), offer its children first; sibling completion for the
+    // last segment is appended so typing can still refine (e.g. .../work ->
+    // children of workspace AND .../workspace itself's siblings).
+    const trimmed = expanded.replace(/\/+$/, '') || '/';
+    let dirs = [];
+    if (expanded.endsWith('/') || isExistingDir(expanded)) {
+        dirs = readDirs(trimmed, '');
+        const parentMatches = readDirs(path.dirname(trimmed), path.basename(trimmed))
+            .filter(d => d !== trimmed);
+        dirs = dirs.concat(parentMatches);
+    } else {
+        dirs = readDirs(path.dirname(expanded), path.basename(expanded));
+    }
     return dirs.slice(0, 20);
 }
 
