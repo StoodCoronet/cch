@@ -1130,12 +1130,8 @@ function loadNewDevices() {
             $("new-error").textContent = "No daemon online — connect a device first";
             return;
         }
-        if (online.length === 1) {
-            // A single online device is used implicitly; hide the dropdown.
-            $("new-device-row").classList.add("hidden");
-            selectNewDevice(online[0]);
-            return;
-        }
+        // Always show the device row — even a single device should be visible
+        // so the user knows where the session will run.
         sel.innerHTML = "";
         online.forEach(function(id) {
             var opt = document.createElement("option");
