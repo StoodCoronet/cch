@@ -313,6 +313,10 @@ select.modal-input{margin-bottom:0}
 .cwd-suggest{position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:30;max-height:264px;overflow-y:auto;background:var(--bg-elevated);border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow)}
 .cwd-suggest-item{padding:9px 12px;font-size:13px;font-family:"SF Mono","Fira Code",monospace;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cwd-suggest-item:hover,.cwd-suggest-item.active{background:var(--bg-hover)}
+.cwd-hint{font-size:12px;color:var(--fg-tertiary);margin-top:6px;line-height:1.5}
+.cwd-hint:empty{display:none}
+.cwd-hint .hint-link{color:var(--accent-light);cursor:pointer}
+.cwd-hint .hint-link:hover{text-decoration:underline}
 
 .hidden{display:none}
 
@@ -463,6 +467,7 @@ select.modal-input{margin-bottom:0}
           <input id="new-cwd" class="modal-input" type="text" placeholder="Working directory, e.g. /Users/me/project" autocomplete="off">
           <div id="new-cwd-suggest" class="cwd-suggest hidden"></div>
         </div>
+        <div id="new-cwd-hint" class="cwd-hint"></div>
       </div>
       <div class="modal-section">
         <h3>Profile</h3>

@@ -1107,6 +1107,7 @@ function openNewModal() {
     $("new-cwd").value = "";
     cwdCommon = [];
     hideCwdSuggest();
+    setCwdHint("");
     $("new-profile").innerHTML = "";
     $("new-device").innerHTML = '<option value="">Loading devices...</option>';
     $("new-device-row").classList.remove("hidden");
@@ -1159,6 +1160,8 @@ function selectNewDevice(machineId) {
     // Device switch: drop any stale suggestions
     hideCwdSuggest();
     cwdCommon = [];
+    setCwdHint("");
+    scheduleCwdHint();
     // Common directories = unique cwds of this device's sessions
     ccdRpc("list-sessions", {}, machineId).then(function(res) {
         var sessions = (res && res.sessions) || [];
@@ -1275,6 +1278,7 @@ function pickCwd(dir) {
     $("new-cwd").value = dir;
     hideCwdSuggest();
     updateNewSubmit();
+    scheduleCwdHint();
     $("new-cwd").focus();
 }
 
@@ -1295,9 +1299,55 @@ function scheduleCwdSuggest() {
     }, 300);
 }
 
+// ----- Existing-conversation hint under the Directory field -----
+
+var cwdHintTimer = null;
+
+function setCwdHint(html) {
+    $("new-cwd-hint").innerHTML = html || "";
+}
+
+function scheduleCwdHint() {
+    if (cwdHintTimer) clearTimeout(cwdHintTimer);
+    cwdHintTimer = setTimeout(function() {
+        cwdHintTimer = null;
+        fetchCwdHint();
+    }, 500);
+}
+
+function fetchCwdHint() {
+    var cwd = $("new-cwd").value.trim();
+    var machineId = currentNewDevice();
+    if (!cwd || !machineId) { setCwdHint(""); return; }
+    ccdRpc("list-conversations", { cwd: cwd }, machineId).then(function(res) {
+        // Drop stale results if the directory changed meanwhile
+        if ($("new-cwd").value.trim() !== cwd) return;
+        var convs = (res && res.conversations) || [];
+        if (!convs.length) {
+            setCwdHint("No conversations in this directory yet");
+            return;
+        }
+        var latest = convs[0]; // list-conversations is updatedAt-desc
+        var title = latest.title || (latest.claudeSessionId || "").slice(0, 8);
+        var t = convTime(latest);
+        setCwdHint(
+            esc(convs.length + " existing conversation" + (convs.length > 1 ? "s" : "") +
+                " here — latest: \"" + title + "\"" + (t ? " " + ago(t) : "") + " · ") +
+            '<span class="hint-link" id="new-cwd-hint-resume">Resume instead →</span>'
+        );
+        $("new-cwd-hint-resume").onclick = function() {
+            // Jump to the Resume panel pre-filtered to this directory
+            closeNewModal();
+            openResumeModal();
+            $("resume-search").value = cwd;
+        };
+    }).catch(function() { /* keep the previous hint on rpc failure */ });
+}
+
 $("new-cwd").addEventListener("input", function() {
     updateNewSubmit();
     scheduleCwdSuggest();
+    scheduleCwdHint();
 });
 $("new-cwd").addEventListener("focus", function() {
     if (!$("new-cwd").value.trim()) showCwdSuggest(cwdCommon);
