@@ -1108,6 +1108,7 @@ function openNewModal() {
     cwdCommon = [];
     hideCwdSuggest();
     setCwdHint("");
+    renderCwdConvs([]);
     $("new-profile").innerHTML = "";
     $("new-device").innerHTML = '<option value="">Loading devices...</option>';
     $("new-device-row").classList.remove("hidden");
@@ -1157,6 +1158,7 @@ function selectNewDevice(machineId) {
     hideCwdSuggest();
     cwdCommon = [];
     setCwdHint("");
+    renderCwdConvs([]);
     scheduleCwdHint();
     // Common directories = unique cwds of this device's sessions
     ccdRpc("list-sessions", {}, machineId).then(function(res) {
@@ -1314,30 +1316,87 @@ function scheduleCwdHint() {
 function fetchCwdHint() {
     var cwd = $("new-cwd").value.trim();
     var machineId = currentNewDevice();
-    if (!cwd || !machineId) { setCwdHint(""); return; }
+    if (!cwd || !machineId) { setCwdHint(""); renderCwdConvs([]); return; }
     ccdRpc("list-conversations", { cwd: cwd }, machineId).then(function(res) {
         // Drop stale results if the directory changed meanwhile
         if ($("new-cwd").value.trim() !== cwd) return;
         var convs = (res && res.conversations) || [];
         if (!convs.length) {
             setCwdHint("No conversations in this directory yet");
+            renderCwdConvs([]);
             return;
         }
-        var latest = convs[0]; // list-conversations is updatedAt-desc
-        var title = latest.title || (latest.claudeSessionId || "").slice(0, 8);
-        var t = convTime(latest);
-        setCwdHint(
-            esc(convs.length + " existing conversation" + (convs.length > 1 ? "s" : "") +
-                " here — latest: \"" + title + "\"" + (t ? " " + ago(t) : "") + " · ") +
-            '<span class="hint-link" id="new-cwd-hint-resume">Resume instead →</span>'
-        );
-        $("new-cwd-hint-resume").onclick = function() {
+        setCwdHint(esc(convs.length + " existing conversation" + (convs.length > 1 ? "s" : "") + " here"));
+        renderCwdConvs(convs, cwd, machineId);
+    }).catch(function() { /* keep the previous hint on rpc failure */ });
+}
+
+var newConvBusy = false; // a resume-from-card spawn is in flight
+
+function renderCwdConvs(convs, cwd, machineId) {
+    var box = $("new-cwd-convs");
+    box.innerHTML = "";
+    box.classList.remove("busy");
+    if (!convs || !convs.length) return;
+    convs.slice(0, 5).forEach(function(c) {
+        var el = document.createElement("div");
+        el.className = "cwd-conv-card";
+        var t = convTime(c);
+        el.innerHTML =
+            '<div class="conv-title">' + esc(c.title || (c.claudeSessionId || "").slice(0, 8)) + '</div>' +
+            (t ? '<div class="conv-time">' + esc(ago(t)) + '</div>' : '');
+        el.onclick = function() { resumeFromNewModal(el, cwd, machineId, c); };
+        box.appendChild(el);
+    });
+    if (convs.length > 5) {
+        var more = document.createElement("div");
+        more.className = "cwd-conv-card more";
+        more.textContent = "+" + (convs.length - 5) + " more →";
+        more.onclick = function() {
+            if (newConvBusy) return;
             // Jump to the Resume panel pre-filtered to this directory
             closeNewModal();
             openResumeModal();
             $("resume-search").value = cwd;
         };
-    }).catch(function() { /* keep the previous hint on rpc failure */ });
+        box.appendChild(more);
+    }
+}
+
+// Resume a conversation directly from its card: profile comes from the New
+// modal's dropdown when loaded, otherwise from the kv memory chain.
+function resumeFromNewModal(cardEl, cwd, machineId, conv) {
+    if (newConvBusy) return;
+    newConvBusy = true;
+    var box = $("new-cwd-convs");
+    box.classList.add("busy");
+    cardEl.classList.add("loading");
+    var timeEl = cardEl.querySelector(".conv-time");
+    if (timeEl) timeEl.textContent = "starting...";
+    var id = conv.claudeSessionId;
+    var profileName = $("new-profile").value;
+    var profilePromise = profileName
+        ? Promise.resolve(profileName)
+        : kvGet("profile:conv:" + id).then(function(v) {
+            if (v) return v;
+            return kvGet("profile:last").then(function(v2) { return v2 || "default"; });
+        });
+    profilePromise.then(function(name) {
+        return ccdRpc("spawn", { cwd: cwd, profileName: name, resumeId: id }, machineId).then(function(res) {
+            kvPut("profile:conv:" + id, name);
+            kvPut("profile:last", name);
+            return res;
+        });
+    }).then(function(res) {
+        newConvBusy = false;
+        closeNewModal();
+        openSpawnedSession(res && res.sessionId);
+    }).catch(function(e) {
+        newConvBusy = false;
+        box.classList.remove("busy");
+        cardEl.classList.remove("loading");
+        $("new-error").textContent = spawnErrorText(e);
+    });
 }
 
 $("new-cwd").addEventListener("input", function() {

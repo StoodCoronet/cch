@@ -315,8 +315,15 @@ select.modal-input{margin-bottom:0}
 .cwd-suggest-item:hover,.cwd-suggest-item.active{background:var(--bg-hover)}
 .cwd-hint{font-size:12px;color:var(--fg-tertiary);margin-top:6px;line-height:1.5}
 .cwd-hint:empty{display:none}
-.cwd-hint .hint-link{color:var(--accent-light);cursor:pointer}
-.cwd-hint .hint-link:hover{text-decoration:underline}
+.cwd-convs{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.cwd-convs:empty{display:none}
+.cwd-conv-card{border:1px solid var(--border);border-radius:8px;background:var(--bg);padding:6px 10px;cursor:pointer;max-width:180px;min-width:0;transition:all .15s}
+.cwd-conv-card:hover{background:var(--bg-hover);border-color:var(--border-strong)}
+.cwd-conv-card .conv-title{font-size:12px;font-family:"SF Mono","Fira Code",monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cwd-conv-card .conv-time{font-size:11px;color:var(--fg-tertiary);margin-top:2px}
+.cwd-conv-card.more{display:flex;align-items:center;font-size:12px;color:var(--accent-light)}
+.cwd-convs.busy .cwd-conv-card{opacity:.5;pointer-events:none}
+.cwd-conv-card.loading{opacity:.7;pointer-events:none;border-color:var(--accent)}
 
 .hidden{display:none}
 
@@ -468,6 +475,7 @@ select.modal-input{margin-bottom:0}
           <div id="new-cwd-suggest" class="cwd-suggest hidden"></div>
         </div>
         <div id="new-cwd-hint" class="cwd-hint"></div>
+        <div id="new-cwd-convs" class="cwd-convs"></div>
       </div>
       <div class="modal-section">
         <h3>Profile</h3>
