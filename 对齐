@@ -92,6 +92,8 @@ web (xterm.js) ◀─term-output── server ◀── node-ccd daemon ◀─�
 **New = 独立流程**：显式选设备 + 目录（常用目录+手输）+ profile（记住全局上次）。
 **profile 记忆存 server**（UserKVStore：`profile:conv:<claudeSessionId>` 和 `profile:last`）。
 
+> 2026-08-20 修订：New/Resume 合并为单一 **Add** 入口（commit 见 git log）。Add modal = Device（始终显示）+ Directory（shell 式前缀补全，完整目录列子目录）+ 会话区（默认显示当前目录最近 5 个会话卡片，点卡片就地恢复；搜索框非空时切换为全设备全局搜索结果）+ Profile（kv 记忆）。原 New/Resume 两个 modal 已删除。
+
 ### 协议/接口新增
 - daemon RPC `list-all-conversations`：扫 `~/.claude/projects/*/*.jsonl`，每条返回 {claudeSessionId, title, cwd（读 jsonl 里的 cwd 字段，slug 不可逆所以必须读文件）, updatedAt}；按 updatedAt 倒序，上限 100。
 - server REST：`GET /v1/sessions?active=true` 过滤；`PATCH /v1/sessions/:id {active?}`（归档用）；`GET/PUT /v1/kv/:key`（account 隔离的字符串 KV，给 profile 记忆用）。

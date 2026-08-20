@@ -294,35 +294,29 @@ button,input,textarea,select{font-family:inherit;font-size:inherit}
 .token-list-item .actions button:hover{background:var(--bg-hover)}
 .token-list-item .actions button.revoke:hover{border-color:var(--red);color:var(--red);background:rgba(239,68,68,.08)}
 
-/* Resume conversation panel */
-#resume-status{font-size:13px;color:var(--fg-tertiary);text-align:center;margin:0 0 10px}
-#resume-status:empty{display:none}
-.resume-list{max-height:50vh;overflow-y:auto}
-.resume-device{display:flex;align-items:center;gap:6px;padding:12px 4px 4px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--fg-tertiary)}
-.resume-device .count{font-weight:400}
-.resume-project{padding:8px 4px 2px;font-size:12px;font-weight:600;color:var(--fg-secondary)}
-.resume-item{display:flex;align-items:center;gap:8px;padding:8px 10px;margin-left:10px;border-radius:8px;cursor:pointer}
-.resume-item:hover{background:var(--bg-hover)}
-.resume-item .conv-title{flex:1;min-width:0;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.resume-item .conv-time{font-size:11px;color:var(--fg-tertiary);flex-shrink:0}
+/* Add session modal — conversation area (default + search modes) */
+#add-conv-status{font-size:13px;color:var(--fg-tertiary);text-align:center;margin:0 0 10px}
+#add-conv-status:empty{display:none}
+.add-conv-list{display:flex;flex-wrap:wrap;gap:8px;max-height:40vh;overflow-y:auto}
+.add-device-head{flex-basis:100%;display:flex;align-items:center;gap:6px;padding:8px 4px 2px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--fg-tertiary)}
+.add-device-head .count{font-weight:400}
+.add-proj-head{flex-basis:100%;padding:4px 4px 0;font-size:12px;font-weight:600;color:var(--fg-secondary)}
+.add-conv-list .empty{flex-basis:100%;padding:14px 8px}
 select.modal-input{margin-bottom:0}
 
-/* Directory autocomplete in the New modal */
+/* Directory autocomplete and conversation cards in the Add modal */
 .cwd-field{position:relative}
 .cwd-field .modal-input{margin-bottom:0}
 .cwd-suggest{position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:30;max-height:264px;overflow-y:auto;background:var(--bg-elevated);border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow)}
 .cwd-suggest-item{padding:9px 12px;font-size:13px;font-family:"SF Mono","Fira Code",monospace;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cwd-suggest-item:hover,.cwd-suggest-item.active{background:var(--bg-hover)}
-.cwd-hint{font-size:12px;color:var(--fg-tertiary);margin-top:6px;line-height:1.5}
-.cwd-hint:empty{display:none}
-.cwd-convs{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
-.cwd-convs:empty{display:none}
 .cwd-conv-card{border:1px solid var(--border);border-radius:8px;background:var(--bg);padding:6px 10px;cursor:pointer;max-width:180px;min-width:0;transition:all .15s}
 .cwd-conv-card:hover{background:var(--bg-hover);border-color:var(--border-strong)}
 .cwd-conv-card .conv-title{font-size:12px;font-family:"SF Mono","Fira Code",monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cwd-conv-card .conv-time{font-size:11px;color:var(--fg-tertiary);margin-top:2px}
 .cwd-conv-card.more{display:flex;align-items:center;font-size:12px;color:var(--accent-light)}
-.cwd-convs.busy .cwd-conv-card{opacity:.5;pointer-events:none}
+.cwd-conv-card.new-card{border-style:dashed;color:var(--accent-light)}
+.add-conv-list.busy .cwd-conv-card{opacity:.5;pointer-events:none}
 .cwd-conv-card.loading{opacity:.7;pointer-events:none;border-color:var(--accent)}
 
 .hidden{display:none}
@@ -379,7 +373,7 @@ select.modal-input{margin-bottom:0}
     <div class="sidebar-search">
       <input id="session-search" type="text" placeholder="Search sessions...">
     </div>
-    <div class="sidebar-section-title"><span>Sessions <span id="scount" style="color:var(--fg-tertiary);font-weight:400">0</span></span><button class="new-session-btn" id="open-new-modal">+ New</button><button class="new-session-btn" id="open-resume-modal">Resume</button><button class="clear-sessions-btn" id="clear-sessions-btn" title="Delete all sessions from the server">Clear</button></div>
+    <div class="sidebar-section-title"><span>Sessions <span id="scount" style="color:var(--fg-tertiary);font-weight:400">0</span></span><button class="new-session-btn" id="open-add-modal">+ Add</button><button class="clear-sessions-btn" id="clear-sessions-btn" title="Delete all sessions from the server">Clear</button></div>
     <div class="session-list" id="slist"><div class="empty">No sessions yet</div></div>
 
     <div class="sidebar-panels">
@@ -456,48 +450,37 @@ select.modal-input{margin-bottom:0}
   </div>
 </div>
 
-<!-- New Session Modal -->
-<div class="modal-overlay" id="new-modal">
+<!-- Add Session Modal (new + resume in one) -->
+<div class="modal-overlay" id="add-modal">
   <div class="modal">
     <div class="modal-header">
-      <h2>New Session</h2>
-      <button class="modal-close" id="close-new-modal">×</button>
+      <h2>Add Session</h2>
+      <button class="modal-close" id="close-add-modal">×</button>
     </div>
     <div class="modal-body">
-      <div class="modal-section" id="new-device-row">
+      <div class="modal-section">
         <h3>Device</h3>
-        <select id="new-device" class="modal-input"></select>
+        <select id="add-device" class="modal-input"></select>
       </div>
       <div class="modal-section">
         <h3>Directory</h3>
         <div class="cwd-field">
-          <input id="new-cwd" class="modal-input" type="text" placeholder="Working directory, e.g. /Users/me/project" autocomplete="off">
-          <div id="new-cwd-suggest" class="cwd-suggest hidden"></div>
+          <input id="add-cwd" class="modal-input" type="text" placeholder="Working directory, e.g. /Users/me/project" autocomplete="off">
+          <div id="add-cwd-suggest" class="cwd-suggest hidden"></div>
         </div>
-        <div id="new-cwd-hint" class="cwd-hint"></div>
-        <div id="new-cwd-convs" class="cwd-convs"></div>
+      </div>
+      <div class="modal-section">
+        <h3>Conversations</h3>
+        <input id="add-search" class="modal-input" type="text" placeholder="Search all conversations…" autocomplete="off">
+        <p id="add-conv-status"></p>
+        <div id="add-conv-list" class="add-conv-list"></div>
       </div>
       <div class="modal-section">
         <h3>Profile</h3>
-        <select id="new-profile" class="modal-input"></select>
+        <select id="add-profile" class="modal-input"></select>
       </div>
-      <button id="new-submit" class="modal-btn" disabled>Start</button>
-      <p class="error" id="new-error" style="text-align:center;margin-top:10px"></p>
-    </div>
-  </div>
-</div>
-
-<!-- Resume Conversation Modal -->
-<div class="modal-overlay" id="resume-modal">
-  <div class="modal">
-    <div class="modal-header">
-      <h2>Resume Conversation</h2>
-      <button class="modal-close" id="close-resume-modal">×</button>
-    </div>
-    <div class="modal-body">
-      <input id="resume-search" class="modal-input" type="text" placeholder="Search title, directory or session id...">
-      <p id="resume-status"></p>
-      <div id="resume-list" class="resume-list"></div>
+      <button id="add-submit" class="modal-btn" disabled>Start</button>
+      <p class="error" id="add-error" style="text-align:center;margin-top:10px"></p>
     </div>
   </div>
 </div>

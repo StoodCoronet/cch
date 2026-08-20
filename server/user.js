@@ -115,8 +115,7 @@ $("connect-modal").onclick = function(e) {
 document.addEventListener("keydown", function(e) {
     if (e.key !== "Escape") return;
     if ($("connect-modal").classList.contains("open")) closeModal();
-    if ($("new-modal").classList.contains("open")) closeNewModal();
-    if ($("resume-modal").classList.contains("open")) closeResumeModal();
+    if ($("add-modal").classList.contains("open")) closeAddModal();
 });
 
 // Search
@@ -1014,13 +1013,6 @@ function copyForNode(conn) {
 
 var rpcSeq = 0;
 var rpcPending = {};      // reqId -> {resolve, reject}
-var newDevices = [];      // online machine ids probed for the New modal
-var cwdCommon = [];       // common dirs for the New modal (from list-sessions)
-var cwdSuggestItems = []; // currently shown autocomplete entries
-var cwdSuggestIndex = -1; // keyboard-highlighted entry, -1 = none
-var cwdSuggestTimer = null; // debounce timer for list-directories
-var resumeData = [];      // [{machineId, conversations: [...]}]
-var resumeBusy = false;   // a resume spawn is in flight
 
 function ccdRpc(method, params, machineId) {
     return new Promise(function(resolve, reject) {
@@ -1099,67 +1091,103 @@ function probeOnlineDevices() {
     });
 }
 
-// ----- New session modal -----
+// ----- Add session modal (new + resume in one) -----
 
-function openNewModal() {
-    $("new-modal").classList.add("open");
-    $("new-error").textContent = "";
-    $("new-cwd").value = "";
+var addDevices = [];        // online machine ids probed for the Add modal
+var addAllConvs = [];       // prefetched global conversations: [{machineId, conversations}]
+var addAllConvsLoaded = false;
+var addDirConvs = [];       // conversations in the current Directory (default view)
+var addShowAll = false;     // "show all N" expanded for the default view
+var addBusy = false;        // a start/resume spawn is in flight
+var cwdCommon = [];         // common dirs for the cwd autocomplete (from list-sessions)
+var cwdSuggestItems = [];   // currently shown autocomplete entries
+var cwdSuggestIndex = -1;   // keyboard-highlighted entry, -1 = none
+var cwdSuggestTimer = null; // debounce timer for list-directories
+var addDirTimer = null;     // debounce timer for list-conversations
+
+function convTime(c) {
+    var t = typeof c.updatedAt === "number" ? c.updatedAt : Date.parse(c.updatedAt);
+    return isNaN(t) ? 0 : t;
+}
+
+function openAddModal() {
+    $("add-modal").classList.add("open");
+    $("add-error").textContent = "";
+    $("add-search").value = "";
+    $("add-profile").innerHTML = "";
+    $("add-device").innerHTML = '<option value="">Loading devices...</option>';
+    addDevices = [];
+    addAllConvs = [];
+    addAllConvsLoaded = false;
+    addDirConvs = [];
+    addShowAll = false;
+    addBusy = false;
     cwdCommon = [];
     hideCwdSuggest();
-    setCwdHint("");
-    renderCwdConvs([]);
-    $("new-profile").innerHTML = "";
-    $("new-device").innerHTML = '<option value="">Loading devices...</option>';
-    $("new-device-row").classList.remove("hidden");
-    newDevices = [];
-    updateNewSubmit();
-    loadNewDevices();
-    $("new-cwd").focus();
+    setConvStatus("Loading devices...");
+    renderAddConvs();
+    updateAddSubmit();
+    loadAddDevices();
+    // Prefill the current session's cwd so its conversations show up directly
+    var meta = sessionMeta[currentSessionId] || {};
+    $("add-cwd").value = meta.cwd || "";
+    if (meta.cwd) scheduleAddDirConvs();
+    $("add-cwd").focus();
 }
 
-function closeNewModal() {
-    $("new-modal").classList.remove("open");
+function closeAddModal() {
+    $("add-modal").classList.remove("open");
 }
 
-function loadNewDevices() {
+function setConvStatus(text) {
+    $("add-conv-status").textContent = text;
+}
+
+function loadAddDevices() {
     probeOnlineDevices().then(function(online) {
-        newDevices = online;
-        var sel = $("new-device");
+        addDevices = online;
+        var sel = $("add-device");
+        sel.innerHTML = "";
         if (!online.length) {
-            sel.innerHTML = "";
-            $("new-error").textContent = "No daemon online — connect a device first";
+            setConvStatus("No devices online");
             return;
         }
-        // Always show the device row — even a single device should be visible
-        // so the user knows where the session will run.
-        sel.innerHTML = "";
         online.forEach(function(id) {
             var opt = document.createElement("option");
             opt.value = id;
             opt.textContent = id;
             sel.appendChild(opt);
         });
-        selectNewDevice(sel.value);
+        selectAddDevice(sel.value);
+        // Prefetch global conversations so search mode filters locally
+        if (!$("add-cwd").value.trim()) setConvStatus("Loading conversations...");
+        Promise.all(online.map(function(id) {
+            return ccdRpc("list-all-conversations", {}, id).then(function(res) {
+                return { machineId: id, conversations: (res && res.conversations) || [] };
+            }).catch(function() { return { machineId: id, conversations: [] }; });
+        })).then(function(rows) {
+            addAllConvs = rows;
+            addAllConvsLoaded = true;
+            setConvStatus("");
+            renderAddConvs();
+        });
     }).catch(function(e) {
-        $("new-device").innerHTML = "";
-        $("new-error").textContent = spawnErrorText(e);
+        $("add-device").innerHTML = "";
+        setConvStatus(spawnErrorText(e));
     });
 }
 
-function currentNewDevice() {
-    if (newDevices.length === 1) return newDevices[0];
-    return $("new-device").value || null;
+function currentAddDevice() {
+    return $("add-device").value || null;
 }
 
-function selectNewDevice(machineId) {
+function selectAddDevice(machineId) {
     if (!machineId) return;
-    // Device switch: drop any stale suggestions
     hideCwdSuggest();
     cwdCommon = [];
-    setCwdHint("");
-    renderCwdConvs([]);
-    scheduleCwdHint();
+    addDirConvs = [];
+    addShowAll = false;
+    renderAddConvs();
     // Common directories = unique cwds of this device's sessions
     ccdRpc("list-sessions", {}, machineId).then(function(res) {
         var sessions = (res && res.sessions) || [];
@@ -1171,11 +1199,11 @@ function selectNewDevice(machineId) {
             cwdCommon.push(s.cwd);
         });
     }).catch(function(e) {
-        $("new-error").textContent = spawnErrorText(e);
+        $("add-error").textContent = spawnErrorText(e);
     });
     ccdRpc("list-profiles", {}, machineId).then(function(res) {
         var profiles = (res && res.profiles) || [];
-        var sel = $("new-profile");
+        var sel = $("add-profile");
         sel.innerHTML = "";
         profiles.forEach(function(p) {
             var opt = document.createElement("option");
@@ -1190,43 +1218,195 @@ function selectNewDevice(machineId) {
             opt.textContent = "(no profiles)";
             sel.appendChild(opt);
         }
-        updateNewSubmit();
+        updateAddSubmit();
         // Default to the last used profile when this device offers it
         kvGet("profile:last").then(function(last) {
             if (!last) return;
             for (var i = 0; i < sel.options.length; i++) {
                 if (sel.options[i].value === last) { sel.value = last; break; }
             }
-            updateNewSubmit();
+            updateAddSubmit();
         });
     }).catch(function(e) {
-        $("new-error").textContent = spawnErrorText(e);
+        $("add-error").textContent = spawnErrorText(e);
+    });
+    scheduleAddDirConvs();
+}
+
+// Conversations of the current Directory (default view of the conv area)
+function scheduleAddDirConvs() {
+    if (addDirTimer) clearTimeout(addDirTimer);
+    addDirTimer = setTimeout(function() {
+        addDirTimer = null;
+        fetchAddDirConvs();
+    }, 500);
+}
+
+function fetchAddDirConvs() {
+    var cwd = $("add-cwd").value.trim();
+    var machineId = currentAddDevice();
+    if (!cwd || !machineId) {
+        addDirConvs = [];
+        renderAddConvs();
+        return;
+    }
+    ccdRpc("list-conversations", { cwd: cwd }, machineId).then(function(res) {
+        // Drop stale results if the directory changed meanwhile
+        if ($("add-cwd").value.trim() !== cwd) return;
+        addDirConvs = (res && res.conversations) || [];
+        renderAddConvs();
+    }).catch(function() { /* keep previous cards on rpc failure */ });
+}
+
+function renderConvCard(c, machineId, cwd) {
+    var el = document.createElement("div");
+    el.className = "cwd-conv-card";
+    var t = convTime(c);
+    el.innerHTML =
+        '<div class="conv-title">' + esc(c.title || (c.claudeSessionId || "").slice(0, 8)) + '</div>' +
+        (t ? '<div class="conv-time">' + esc(ago(t)) + '</div>' : '');
+    el.onclick = function() { resumeFromAddModal(el, machineId, cwd, c); };
+    return el;
+}
+
+function renderAddConvs() {
+    var box = $("add-conv-list");
+    box.innerHTML = "";
+    box.classList.toggle("busy", addBusy);
+    var q = $("add-search").value.trim().toLowerCase();
+    if (q) { renderAddSearchResults(box, q); return; }
+    // Default mode: "new session" card first, then this directory's history
+    var newCard = document.createElement("div");
+    newCard.className = "cwd-conv-card new-card";
+    newCard.innerHTML = '<div class="conv-title">✚ New session in this directory</div>';
+    newCard.onclick = function() { if (!addBusy) submitAdd(); };
+    box.appendChild(newCard);
+    var showCount = addShowAll ? addDirConvs.length : Math.min(5, addDirConvs.length);
+    var cwd = $("add-cwd").value.trim();
+    addDirConvs.slice(0, showCount).forEach(function(c) {
+        box.appendChild(renderConvCard(c, currentAddDevice(), cwd));
+    });
+    if (!addShowAll && addDirConvs.length > 5) {
+        var more = document.createElement("div");
+        more.className = "cwd-conv-card more";
+        more.textContent = "show all " + addDirConvs.length;
+        more.onclick = function() {
+            addShowAll = true;
+            renderAddConvs();
+        };
+        box.appendChild(more);
+    }
+}
+
+function renderAddSearchResults(box, q) {
+    if (!addAllConvsLoaded) return; // status line already says "Loading..."
+    var any = false;
+    addAllConvs.forEach(function(dev) {
+        var matches = dev.conversations.filter(function(c) {
+            var hay = ((c.title || "") + " " + (c.cwd || "") + " " + (c.claudeSessionId || "")).toLowerCase();
+            return hay.indexOf(q) !== -1;
+        });
+        if (!matches.length) return;
+        any = true;
+        var devHead = document.createElement("div");
+        devHead.className = "add-device-head";
+        devHead.innerHTML = '<span>' + esc(dev.machineId) + '</span><span class="count">' + matches.length + '</span>';
+        box.appendChild(devHead);
+        // Second level: group by project (cwd last segment)
+        var groups = {};
+        var order = [];
+        matches.forEach(function(c) {
+            var proj = projectLabel(c.cwd);
+            if (!groups[proj]) { groups[proj] = []; order.push(proj); }
+            groups[proj].push(c);
+        });
+        order.sort(function(a, b) {
+            var ta = 0, tb = 0;
+            groups[a].forEach(function(c) { if (convTime(c) > ta) ta = convTime(c); });
+            groups[b].forEach(function(c) { if (convTime(c) > tb) tb = convTime(c); });
+            return tb - ta;
+        });
+        order.forEach(function(proj) {
+            var items = groups[proj];
+            items.sort(function(a, b) { return convTime(b) - convTime(a); });
+            var pHead = document.createElement("div");
+            pHead.className = "add-proj-head";
+            pHead.textContent = proj;
+            box.appendChild(pHead);
+            items.forEach(function(c) {
+                box.appendChild(renderConvCard(c, dev.machineId, c.cwd));
+            });
+        });
+    });
+    if (!any) {
+        var empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = "No matching conversations";
+        box.appendChild(empty);
+    }
+}
+
+// Resume a conversation from a card (default or search mode alike): profile
+// comes from the modal dropdown when loaded, otherwise the kv memory chain.
+function resumeFromAddModal(cardEl, machineId, cwd, conv) {
+    if (addBusy) return;
+    addBusy = true;
+    $("add-conv-list").classList.add("busy");
+    cardEl.classList.add("loading");
+    var timeEl = cardEl.querySelector(".conv-time");
+    if (timeEl) timeEl.textContent = "starting...";
+    var id = conv.claudeSessionId;
+    var profileName = $("add-profile").value;
+    var profilePromise = profileName
+        ? Promise.resolve(profileName)
+        : kvGet("profile:conv:" + id).then(function(v) {
+            if (v) return v;
+            return kvGet("profile:last").then(function(v2) { return v2 || "default"; });
+        });
+    profilePromise.then(function(name) {
+        return ccdRpc("spawn", { cwd: cwd, profileName: name, resumeId: id }, machineId).then(function(res) {
+            kvPut("profile:conv:" + id, name);
+            kvPut("profile:last", name);
+            return res;
+        });
+    }).then(function(res) {
+        addBusy = false;
+        closeAddModal();
+        openSpawnedSession(res && res.sessionId);
+    }).catch(function(e) {
+        addBusy = false;
+        renderAddConvs();
+        $("add-error").textContent = spawnErrorText(e);
     });
 }
 
-function updateNewSubmit() {
-    var btn = $("new-submit");
+// ----- Start button (new session in Directory) -----
+
+function updateAddSubmit() {
+    var btn = $("add-submit");
     if (btn.textContent === "Starting...") return; // submit in flight
-    btn.disabled = !currentNewDevice() || !$("new-cwd").value.trim() || !$("new-profile").value;
+    btn.disabled = addBusy || !currentAddDevice() || !$("add-cwd").value.trim() || !$("add-profile").value;
 }
 
-function submitNew() {
-    var machineId = currentNewDevice();
-    var cwd = $("new-cwd").value.trim();
-    var profileName = $("new-profile").value;
-    if (!machineId || !cwd || !profileName) return;
-    var btn = $("new-submit");
+function submitAdd() {
+    var machineId = currentAddDevice();
+    var cwd = $("add-cwd").value.trim();
+    var profileName = $("add-profile").value;
+    if (!machineId || !cwd || !profileName || addBusy) return;
+    addBusy = true;
+    var btn = $("add-submit");
     btn.disabled = true;
     btn.textContent = "Starting...";
     ccdRpc("spawn", { cwd: cwd, profileName: profileName }, machineId).then(function(res) {
         kvPut("profile:last", profileName);
-        closeNewModal();
+        closeAddModal();
         openSpawnedSession(res && res.sessionId);
     }).catch(function(e) {
-        $("new-error").textContent = spawnErrorText(e);
+        $("add-error").textContent = spawnErrorText(e);
     }).then(function() {
+        addBusy = false;
         btn.textContent = "Start";
-        updateNewSubmit();
+        updateAddSubmit();
     });
 }
 
@@ -1236,7 +1416,7 @@ function hideCwdSuggest() {
     if (cwdSuggestTimer) { clearTimeout(cwdSuggestTimer); cwdSuggestTimer = null; }
     cwdSuggestItems = [];
     cwdSuggestIndex = -1;
-    var box = $("new-cwd-suggest");
+    var box = $("add-cwd-suggest");
     box.classList.add("hidden");
     box.innerHTML = "";
 }
@@ -1244,7 +1424,7 @@ function hideCwdSuggest() {
 function showCwdSuggest(items) {
     cwdSuggestItems = items || [];
     cwdSuggestIndex = -1;
-    var box = $("new-cwd-suggest");
+    var box = $("add-cwd-suggest");
     box.innerHTML = "";
     if (!cwdSuggestItems.length) { box.classList.add("hidden"); return; }
     cwdSuggestItems.forEach(function(dir) {
@@ -1260,7 +1440,7 @@ function showCwdSuggest(items) {
 }
 
 function renderCwdSuggestActive() {
-    var box = $("new-cwd-suggest");
+    var box = $("add-cwd-suggest");
     var kids = box.children;
     for (var i = 0; i < kids.length; i++) {
         kids[i].classList.toggle("active", i === cwdSuggestIndex);
@@ -1273,142 +1453,40 @@ function renderCwdSuggestActive() {
 function pickCwd(dir) {
     // Programmatic value assignment fires no input event, so picking an entry
     // does not immediately retrigger completion.
-    $("new-cwd").value = dir;
+    $("add-cwd").value = dir;
     hideCwdSuggest();
-    updateNewSubmit();
-    scheduleCwdHint();
-    $("new-cwd").focus();
+    updateAddSubmit();
+    scheduleAddDirConvs();
+    $("add-cwd").focus();
 }
 
 function scheduleCwdSuggest() {
     if (cwdSuggestTimer) clearTimeout(cwdSuggestTimer);
     cwdSuggestTimer = setTimeout(function() {
         cwdSuggestTimer = null;
-        var text = $("new-cwd").value.trim();
+        var text = $("add-cwd").value.trim();
         if (!text) { showCwdSuggest(cwdCommon); return; }
-        var machineId = currentNewDevice();
+        var machineId = currentAddDevice();
         if (!machineId) { hideCwdSuggest(); return; }
         ccdRpc("list-directories", { prefix: text }, machineId).then(function(res) {
             // Drop stale results if the user kept typing meanwhile
-            if ($("new-cwd").value.trim() !== text) return;
+            if ($("add-cwd").value.trim() !== text) return;
             var dirs = (res && res.dirs) || [];
             if (dirs.length) showCwdSuggest(dirs); else hideCwdSuggest();
         }).catch(function() { hideCwdSuggest(); });
     }, 300);
 }
 
-// ----- Existing-conversation hint under the Directory field -----
-
-var cwdHintTimer = null;
-
-function setCwdHint(html) {
-    $("new-cwd-hint").innerHTML = html || "";
-}
-
-function scheduleCwdHint() {
-    if (cwdHintTimer) clearTimeout(cwdHintTimer);
-    cwdHintTimer = setTimeout(function() {
-        cwdHintTimer = null;
-        fetchCwdHint();
-    }, 500);
-}
-
-function fetchCwdHint() {
-    var cwd = $("new-cwd").value.trim();
-    var machineId = currentNewDevice();
-    if (!cwd || !machineId) { setCwdHint(""); renderCwdConvs([]); return; }
-    ccdRpc("list-conversations", { cwd: cwd }, machineId).then(function(res) {
-        // Drop stale results if the directory changed meanwhile
-        if ($("new-cwd").value.trim() !== cwd) return;
-        var convs = (res && res.conversations) || [];
-        if (!convs.length) {
-            setCwdHint("No conversations in this directory yet");
-            renderCwdConvs([]);
-            return;
-        }
-        setCwdHint(esc(convs.length + " existing conversation" + (convs.length > 1 ? "s" : "") + " here"));
-        renderCwdConvs(convs, cwd, machineId);
-    }).catch(function() { /* keep the previous hint on rpc failure */ });
-}
-
-var newConvBusy = false; // a resume-from-card spawn is in flight
-
-function renderCwdConvs(convs, cwd, machineId) {
-    var box = $("new-cwd-convs");
-    box.innerHTML = "";
-    box.classList.remove("busy");
-    if (!convs || !convs.length) return;
-    convs.slice(0, 5).forEach(function(c) {
-        var el = document.createElement("div");
-        el.className = "cwd-conv-card";
-        var t = convTime(c);
-        el.innerHTML =
-            '<div class="conv-title">' + esc(c.title || (c.claudeSessionId || "").slice(0, 8)) + '</div>' +
-            (t ? '<div class="conv-time">' + esc(ago(t)) + '</div>' : '');
-        el.onclick = function() { resumeFromNewModal(el, cwd, machineId, c); };
-        box.appendChild(el);
-    });
-    if (convs.length > 5) {
-        var more = document.createElement("div");
-        more.className = "cwd-conv-card more";
-        more.textContent = "+" + (convs.length - 5) + " more →";
-        more.onclick = function() {
-            if (newConvBusy) return;
-            // Jump to the Resume panel pre-filtered to this directory
-            closeNewModal();
-            openResumeModal();
-            $("resume-search").value = cwd;
-        };
-        box.appendChild(more);
-    }
-}
-
-// Resume a conversation directly from its card: profile comes from the New
-// modal's dropdown when loaded, otherwise from the kv memory chain.
-function resumeFromNewModal(cardEl, cwd, machineId, conv) {
-    if (newConvBusy) return;
-    newConvBusy = true;
-    var box = $("new-cwd-convs");
-    box.classList.add("busy");
-    cardEl.classList.add("loading");
-    var timeEl = cardEl.querySelector(".conv-time");
-    if (timeEl) timeEl.textContent = "starting...";
-    var id = conv.claudeSessionId;
-    var profileName = $("new-profile").value;
-    var profilePromise = profileName
-        ? Promise.resolve(profileName)
-        : kvGet("profile:conv:" + id).then(function(v) {
-            if (v) return v;
-            return kvGet("profile:last").then(function(v2) { return v2 || "default"; });
-        });
-    profilePromise.then(function(name) {
-        return ccdRpc("spawn", { cwd: cwd, profileName: name, resumeId: id }, machineId).then(function(res) {
-            kvPut("profile:conv:" + id, name);
-            kvPut("profile:last", name);
-            return res;
-        });
-    }).then(function(res) {
-        newConvBusy = false;
-        closeNewModal();
-        openSpawnedSession(res && res.sessionId);
-    }).catch(function(e) {
-        newConvBusy = false;
-        box.classList.remove("busy");
-        cardEl.classList.remove("loading");
-        $("new-error").textContent = spawnErrorText(e);
-    });
-}
-
-$("new-cwd").addEventListener("input", function() {
-    updateNewSubmit();
+$("add-cwd").addEventListener("input", function() {
+    updateAddSubmit();
     scheduleCwdSuggest();
-    scheduleCwdHint();
+    scheduleAddDirConvs();
 });
-$("new-cwd").addEventListener("focus", function() {
-    if (!$("new-cwd").value.trim()) showCwdSuggest(cwdCommon);
+$("add-cwd").addEventListener("focus", function() {
+    if (!$("add-cwd").value.trim()) showCwdSuggest(cwdCommon);
 });
-$("new-cwd").addEventListener("keydown", function(e) {
-    var open = !$("new-cwd-suggest").classList.contains("hidden");
+$("add-cwd").addEventListener("keydown", function(e) {
+    var open = !$("add-cwd-suggest").classList.contains("hidden");
     if (e.key === "Escape" && open) {
         // Close only the dropdown, not the whole modal
         e.preventDefault();
@@ -1431,154 +1509,34 @@ $("new-cwd").addEventListener("keydown", function(e) {
     }
 });
 document.addEventListener("mousedown", function(e) {
-    if ($("new-cwd-suggest").classList.contains("hidden")) return;
+    if ($("add-cwd-suggest").classList.contains("hidden")) return;
     if (e.target.closest && e.target.closest(".cwd-field")) return;
     hideCwdSuggest();
 });
 
-// ----- Resume conversation panel -----
+// ----- Add modal wiring -----
 
-function openResumeModal() {
-    $("resume-modal").classList.add("open");
-    $("resume-search").value = "";
-    resumeData = [];
-    $("resume-list").innerHTML = "";
-    setResumeStatus("Loading devices...");
-    loadResumeData();
-    $("resume-search").focus();
-}
-
-function closeResumeModal() {
-    $("resume-modal").classList.remove("open");
-}
-
-function setResumeStatus(text) {
-    $("resume-status").textContent = text;
-}
-
-function loadResumeData() {
-    probeOnlineDevices().then(function(online) {
-        if (!online.length) { setResumeStatus("No devices online"); return; }
-        setResumeStatus("Loading conversations...");
-        return Promise.all(online.map(function(id) {
-            return ccdRpc("list-all-conversations", {}, id).then(function(res) {
-                return { machineId: id, conversations: (res && res.conversations) || [] };
-            }).catch(function() { return { machineId: id, conversations: [] }; });
-        })).then(function(rows) {
-            resumeData = rows;
-            var total = 0;
-            rows.forEach(function(r) { total += r.conversations.length; });
-            setResumeStatus(total ? "" : "No conversations found");
-            renderResumeList();
-        });
-    }).catch(function(e) {
-        setResumeStatus(spawnErrorText(e));
-    });
-}
-
-function convTime(c) {
-    var t = typeof c.updatedAt === "number" ? c.updatedAt : Date.parse(c.updatedAt);
-    return isNaN(t) ? 0 : t;
-}
-
-function renderResumeList() {
-    var q = $("resume-search").value.trim().toLowerCase();
-    var box = $("resume-list");
-    box.innerHTML = "";
-    resumeData.forEach(function(dev) {
-        var matches = dev.conversations.filter(function(c) {
-            if (!q) return true;
-            var hay = ((c.title || "") + " " + (c.cwd || "") + " " + (c.claudeSessionId || "")).toLowerCase();
-            return hay.indexOf(q) !== -1;
-        });
-        if (!matches.length) return;
-        var devHead = document.createElement("div");
-        devHead.className = "resume-device";
-        devHead.innerHTML = '<span>' + esc(dev.machineId) + '</span><span class="count">' + matches.length + '</span>';
-        box.appendChild(devHead);
-        // Second level: group by project (cwd last segment)
-        var groups = {};
-        var order = [];
-        matches.forEach(function(c) {
-            var proj = projectLabel(c.cwd);
-            if (!groups[proj]) { groups[proj] = []; order.push(proj); }
-            groups[proj].push(c);
-        });
-        order.sort(function(a, b) {
-            var ta = 0, tb = 0;
-            groups[a].forEach(function(c) { if (convTime(c) > ta) ta = convTime(c); });
-            groups[b].forEach(function(c) { if (convTime(c) > tb) tb = convTime(c); });
-            return tb - ta;
-        });
-        order.forEach(function(proj) {
-            var items = groups[proj];
-            items.sort(function(a, b) { return convTime(b) - convTime(a); });
-            var pHead = document.createElement("div");
-            pHead.className = "resume-project";
-            pHead.textContent = proj;
-            box.appendChild(pHead);
-            items.forEach(function(c) {
-                var el = document.createElement("div");
-                el.className = "resume-item";
-                var t = convTime(c);
-                el.innerHTML =
-                    '<span class="conv-title">' + esc(c.title || (c.claudeSessionId || "").slice(0, 8)) + '</span>' +
-                    (t ? '<span class="conv-time">' + esc(ago(t)) + '</span>' : '');
-                el.onclick = function() { resumeConversation(dev.machineId, c); };
-                box.appendChild(el);
-            });
-        });
-    });
-    if (!box.children.length && resumeData.length && !q && !$("resume-status").textContent) {
-        setResumeStatus("No conversations found");
-    } else if (!box.children.length && q) {
-        setResumeStatus("No matching conversations");
-    } else if (box.children.length && $("resume-status").textContent === "No matching conversations") {
-        setResumeStatus("");
+$("open-add-modal").onclick = openAddModal;
+$("close-add-modal").onclick = closeAddModal;
+$("add-modal").onclick = function(e) {
+    if (e.target === $("add-modal")) closeAddModal();
+};
+$("add-device").onchange = function() { selectAddDevice($("add-device").value); };
+$("add-profile").onchange = updateAddSubmit;
+$("add-submit").onclick = submitAdd;
+$("add-search").addEventListener("input", function() {
+    setConvStatus("");
+    renderAddConvs();
+});
+$("add-search").addEventListener("keydown", function(e) {
+    if (e.key === "Escape") {
+        // Clear the search instead of closing the modal
+        e.preventDefault();
+        e.stopPropagation();
+        this.value = "";
+        renderAddConvs();
     }
-}
-
-function resumeConversation(machineId, conv) {
-    if (resumeBusy) return;
-    resumeBusy = true;
-    setResumeStatus("Starting...");
-    var id = conv.claudeSessionId;
-    // Profile preference: per-conversation memory, then last used, then default
-    kvGet("profile:conv:" + id).then(function(v) {
-        if (v) return v;
-        return kvGet("profile:last").then(function(v2) { return v2 || "default"; });
-    }).then(function(profileName) {
-        return ccdRpc("spawn", { cwd: conv.cwd, profileName: profileName, resumeId: id }, machineId)
-            .then(function(res) {
-                kvPut("profile:conv:" + id, profileName);
-                kvPut("profile:last", profileName);
-                return res;
-            });
-    }).then(function(res) {
-        resumeBusy = false;
-        closeResumeModal();
-        openSpawnedSession(res && res.sessionId);
-    }).catch(function(e) {
-        resumeBusy = false;
-        setResumeStatus(spawnErrorText(e));
-    });
-}
-
-$("open-new-modal").onclick = openNewModal;
-$("close-new-modal").onclick = closeNewModal;
-$("new-modal").onclick = function(e) {
-    if (e.target === $("new-modal")) closeNewModal();
-};
-$("new-device").onchange = function() { selectNewDevice($("new-device").value); };
-$("new-profile").onchange = updateNewSubmit;
-$("new-submit").onclick = submitNew;
-
-$("open-resume-modal").onclick = openResumeModal;
-$("close-resume-modal").onclick = closeResumeModal;
-$("resume-modal").onclick = function(e) {
-    if (e.target === $("resume-modal")) closeResumeModal();
-};
-$("resume-search").addEventListener("input", renderResumeList);
+});
 
 // Events
 $("connect-btn").onclick = connect;
