@@ -102,6 +102,19 @@ tr:last-child td{border-bottom:none}
 .delete-btn:hover{background:var(--red);color:#fff}
 .empty{text-align:center;color:var(--fg-tertiary);padding:28px 0;font-size:14px}
 
+/* Invites */
+.invite-section{margin-top:24px}
+.create-row input[type=number]{flex:0 0 130px;min-width:110px}
+.invite-url{font-family:"SF Mono","Fira Code",monospace;font-size:12px;word-break:break-all;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;line-height:1.6}
+.copy-btn{padding:6px 12px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--fg);font-size:12px;font-weight:600;cursor:pointer;transition:all .15s}
+.copy-btn:hover{background:var(--bg-hover)}
+.revoke-btn{padding:6px 12px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--fg-secondary);font-size:12px;font-weight:600;cursor:pointer;transition:all .15s;margin-left:6px}
+.revoke-btn:hover{border-color:var(--red);color:var(--red)}
+.status-badge{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:600}
+.status-active{color:var(--green);background:var(--green-bg)}
+.status-expired,.status-exhausted{color:var(--fg-tertiary);background:var(--bg-active)}
+.status-revoked{color:var(--red);background:rgba(239,68,68,.1)}
+
 .hidden{display:none!important}
 
 @media (max-width: 640px) {
@@ -167,6 +180,34 @@ tr:last-child td{border-bottom:none}
                     </tr>
                 </thead>
                 <tbody id="accounts-tbody"></tbody>
+            </table>
+        </div>
+
+        <div class="section invite-section">
+            <h2>Invites</h2>
+            <div class="create-row">
+                <input id="invite-label" type="text" placeholder="Label (optional)">
+                <input id="invite-expires" type="number" min="1" value="168" placeholder="Expires (hours)">
+                <input id="invite-max-uses" type="number" min="1" value="1" placeholder="Max uses">
+                <button id="create-invite-btn">Generate Invite</button>
+            </div>
+            <p class="error" id="invite-error"></p>
+            <div id="new-invite-area" class="hidden">
+                <div class="invite-url" id="new-invite-url"></div>
+                <button class="copy-btn" id="copy-invite-btn">Copy link</button>
+            </div>
+            <table id="invites-table" style="margin-top:16px">
+                <thead>
+                    <tr>
+                        <th>Label</th>
+                        <th>Created</th>
+                        <th>Expires</th>
+                        <th>Uses</th>
+                        <th>Status</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody id="invites-tbody"></tbody>
             </table>
         </div>
     </div>

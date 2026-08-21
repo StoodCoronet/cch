@@ -25,6 +25,8 @@ import { kvRoutes } from "./routes/kvRoutes";
 import { v3SessionRoutes } from "./routes/v3SessionRoutes";
 import { attachmentRoutes } from "./routes/attachmentRoutes";
 import { adminRoutes } from "./routes/adminRoutes";
+import { inviteRoutes } from "./routes/inviteRoutes";
+import { getAllowedOrigins } from "./utils/allowedOrigins";
 import { isLocalStorage, getLocalFilesDir } from "@/storage/files";
 import * as path from "path";
 import * as fs from "fs";
@@ -46,10 +48,23 @@ export async function startApi(opts: StartApiOptions = {}) {
         loggerInstance: logger,
         bodyLimit: 1024 * 1024 * 100, // 100MB
     });
-    app.register(import('@fastify/cors'), {
-        origin: '*',
+    // Await plugin registration: @fastify/rate-limit attaches per-route hooks
+    // via an `onRoute` listener, which only sees routes registered AFTER it —
+    // and avvio defers non-awaited register() calls until boot, i.e. after the
+    // synchronous route registrations below. Without await, no route would be
+    // rate-limited at all.
+    await app.register(import('@fastify/helmet'), {
+        // Dashboards use inline styles; leave CSP off for now
+        contentSecurityPolicy: false
+    });
+    await app.register(import('@fastify/rate-limit'), {
+        max: 300,
+        timeWindow: '1 minute'
+    });
+    await app.register(import('@fastify/cors'), {
+        origin: getAllowedOrigins(),
         allowedHeaders: '*',
-        methods: ['GET', 'POST', 'PUT', 'DELETE']
+        methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
     });
 
     // Required for local-mode attachment uploads (PUT /v1/sessions/:id/attachments/:file).
@@ -107,6 +122,7 @@ export async function startApi(opts: StartApiOptions = {}) {
     v3SessionRoutes(typed);
     attachmentRoutes(typed);
     adminRoutes(typed);
+    inviteRoutes(typed);
     eventRoutes(typed);
 
     // Static webapp (self-host mode)

@@ -400,6 +400,23 @@ model BootstrapToken {
 }
 
 //
+// Invite Codes — invite-only registration, managed by the admin dashboard.
+// Server-level (no account relation): the invitee's account does not exist yet.
+//
+
+model InviteCode {
+    id        String    @id @default(cuid())
+    tokenHash String    @unique
+    label     String?
+    expiresAt DateTime
+    maxUses   Int       @default(1)
+    usedCount Int       @default(0)
+    revokedAt DateTime?
+    createdAt DateTime  @default(now())
+    updatedAt DateTime  @updatedAt
+}
+
+//
 // Plaintext messages — for ccd-initiated sessions where client sends unencrypted
 //
 

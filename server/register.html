@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CCH — Register</title>
+<style>
+:root {
+  --bg: #0d0d0d;
+  --bg-elevated: #171717;
+  --bg-hover: #1f1f1f;
+  --bg-input: #1e1e1e;
+  --fg: #f5f5f5;
+  --fg-secondary: #a3a3a3;
+  --fg-tertiary: #737373;
+  --border: #262626;
+  --accent: #4f46e5;
+  --accent-hover: #5b54e6;
+  --accent-light: #818cf8;
+  --green: #22c55e;
+  --red: #ef4444;
+  --shadow: 0 4px 24px rgba(0,0,0,.35);
+}
+[data-theme="light"] {
+  --bg: #fafafa;
+  --bg-elevated: #ffffff;
+  --bg-hover: #f3f4f6;
+  --bg-input: #ffffff;
+  --fg: #171717;
+  --fg-secondary: #525252;
+  --fg-tertiary: #a3a3a3;
+  --border: #e5e5e5;
+  --accent: #4f46e5;
+  --accent-hover: #4338ca;
+  --accent-light: #6366f1;
+  --green: #16a34a;
+  --red: #dc2626;
+  --shadow: 0 4px 24px rgba(0,0,0,.08);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;background:var(--bg);color:var(--fg);line-height:1.55;font-size:14.5px}
+button,input{font-family:inherit;font-size:inherit}
+.screen{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}
+.card{width:100%;max-width:380px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:18px;padding:32px;box-shadow:var(--shadow)}
+.card .logo-wrap{display:flex;align-items:center;justify-content:center;gap:12px;margin-bottom:8px}
+.card .logo-mark{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--accent),var(--accent-light))}
+.card h1{font-size:22px;font-weight:700;text-align:center}
+.card p.sub{text-align:center;color:var(--fg-secondary);margin:6px 0 22px;font-size:14px}
+.card input{width:100%;padding:12px 14px;border-radius:10px;border:1px solid var(--border);background:var(--bg);color:var(--fg);margin-bottom:12px;outline:none;transition:border .15s}
+.card input:focus{border-color:var(--accent)}
+.card input::placeholder{color:var(--fg-tertiary)}
+.card button{width:100%;padding:12px;border-radius:10px;border:none;background:var(--accent);color:#fff;font-weight:600;cursor:pointer;font-size:15px}
+.card button:hover{background:var(--accent-hover)}
+.card button:disabled{background:var(--bg-input);color:var(--fg-tertiary);cursor:not-allowed}
+.error{color:var(--red);font-size:13px;margin-top:8px;text-align:center}
+.big-message{text-align:center;color:var(--fg-secondary);font-size:15px;line-height:1.7}
+.big-message .icon{font-size:34px;display:block;margin-bottom:12px}
+.big-message a{color:var(--accent-light);text-decoration:none;font-weight:600}
+.big-message a:hover{text-decoration:underline}
+.hidden{display:none!important}
+</style>
+</head>
+<body>
+<div class="screen" id="loading-screen">
+    <div class="card"><p class="big-message">Validating invite…</p></div>
+</div>
+
+<div class="screen hidden" id="invalid-screen">
+    <div class="card">
+        <p class="big-message"><span class="icon">⚠️</span>This invite link is invalid or has expired.<br><span id="invalid-reason" style="font-size:13px;color:var(--fg-tertiary)"></span></p>
+    </div>
+</div>
+
+<div class="screen hidden" id="form-screen">
+    <div class="card">
+        <div class="logo-wrap"><div class="logo-mark"></div><h1>CCH</h1></div>
+        <p class="sub">Create your account</p>
+        <input id="email-input" type="email" placeholder="Email" autocomplete="email">
+        <input id="password-input" type="password" placeholder="Password (min 8 chars)" autocomplete="new-password">
+        <input id="confirm-input" type="password" placeholder="Confirm password" autocomplete="new-password">
+        <button id="register-btn">Register</button>
+        <p class="error" id="form-error"></p>
+    </div>
+</div>
+
+<div class="screen hidden" id="success-screen">
+    <div class="card">
+        <p class="big-message"><span class="icon">✅</span>Registration successful.<br><a href="/">Go to login →</a></p>
+    </div>
+</div>
+
+<script src="/register.js"></script>
+</body>
+</html>

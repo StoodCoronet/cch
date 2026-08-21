@@ -109,10 +109,109 @@ $("create-account-btn").onclick = createAccount;
 $("new-account-name").onkeydown = function(e) { if (e.key === "Enter") createAccount(); };
 $("new-account-password").onkeydown = function(e) { if (e.key === "Enter") createAccount(); };
 
+// ===== Invites =====
+
+function copyText(txt) {
+    if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(txt);
+    var ta = document.createElement("textarea"); ta.value = txt; ta.style.position = "fixed"; ta.style.left = "-9999px";
+    document.body.appendChild(ta); ta.select(); document.execCommand("copy"); document.body.removeChild(ta);
+    return Promise.resolve();
+}
+
+function inviteLink(inv) {
+    if (inv.url) return inv.url;
+    if (inv.token) return srv + "/register?token=" + inv.token;
+    return "";
+}
+
+function inviteStatus(inv) {
+    if (inv.revokedAt || inv.revoked) return "revoked";
+    if (inv.expired || (inv.expiresAt && new Date(inv.expiresAt).getTime() < Date.now())) return "expired";
+    if (inv.maxUses != null && (inv.usedCount || 0) >= inv.maxUses) return "exhausted";
+    return "active";
+}
+
+function loadInvites() {
+    api("GET", "/v1/admin/invites").then(function(data) {
+        var tbody = $("invites-tbody");
+        tbody.innerHTML = "";
+        var invites = data.invites || [];
+        if (invites.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="6" class="empty">No invites yet</td></tr>';
+            return;
+        }
+        invites.forEach(function(inv) {
+            var status = inviteStatus(inv);
+            var link = inviteLink(inv);
+            var row = document.createElement("tr");
+            row.innerHTML =
+                "<td>" +
+                    '<div class="user-name">' + esc(inv.label || "—") + '</div>' +
+                    '<div class="user-id">' + esc(String(inv.id).slice(0, 12)) + '</div>' +
+                "</td>" +
+                "<td>" + fmt(inv.createdAt) + "</td>" +
+                "<td>" + (inv.expiresAt ? fmt(inv.expiresAt) : "never") + "</td>" +
+                "<td>" + (inv.usedCount || 0) + " / " + (inv.maxUses != null ? inv.maxUses : "∞") + "</td>" +
+                '<td><span class="status-badge status-' + status + '">' + status + "</span></td>" +
+                '<td style="white-space:nowrap">' +
+                    (link ? '<button class="copy-btn" data-link="' + esc(link) + '">Copy link</button>' : '') +
+                    (status === "active" ? '<button class="revoke-btn" data-id="' + esc(String(inv.id)) + '">Revoke</button>' : '') +
+                "</td>";
+            tbody.appendChild(row);
+        });
+        tbody.querySelectorAll(".copy-btn").forEach(function(btn) {
+            btn.onclick = function() {
+                copyText(btn.dataset.link).then(function() {
+                    btn.textContent = "Copied!";
+                    setTimeout(function() { btn.textContent = "Copy link"; }, 2000);
+                });
+            };
+        });
+        tbody.querySelectorAll(".revoke-btn").forEach(function(btn) {
+            btn.onclick = function() { revokeInvite(btn.dataset.id); };
+        });
+    }).catch(function(e) { console.error(e); });
+}
+
+function createInvite() {
+    var label = $("invite-label").value.trim();
+    var expires = parseInt($("invite-expires").value, 10);
+    var maxUses = parseInt($("invite-max-uses").value, 10);
+    var body = {};
+    if (label) body.label = label;
+    if (expires > 0) body.expiresInHours = expires;
+    if (maxUses > 0) body.maxUses = maxUses;
+    api("POST", "/v1/admin/invites", body).then(function(data) {
+        $("invite-label").value = "";
+        var link = inviteLink(data);
+        if (link) {
+            $("new-invite-url").textContent = link;
+            $("new-invite-area").classList.remove("hidden");
+        }
+        loadInvites();
+    }).catch(function(e) { setError("invite-error", e.message); });
+}
+
+function revokeInvite(id) {
+    if (!confirm("Revoke this invite? It can no longer be used to register.")) return;
+    api("POST", "/v1/admin/invites/" + id + "/revoke").then(loadInvites).catch(function(e) { alert(e.message); });
+}
+
+$("create-invite-btn").onclick = createInvite;
+$("invite-label").onkeydown = function(e) { if (e.key === "Enter") createInvite(); };
+$("copy-invite-btn").onclick = function() {
+    var btn = this;
+    copyText($("new-invite-url").textContent).then(function() {
+        btn.textContent = "Copied!";
+        setTimeout(function() { btn.textContent = "Copy link"; }, 2000);
+    });
+};
+
 if (P) {
     $("login-screen").classList.add("hidden");
     $("main-screen").classList.remove("hidden");
     loadAccounts();
     loadStats();
+    loadInvites();
     setInterval(loadStats, 30000);
 }

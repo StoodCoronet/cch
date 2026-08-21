@@ -10,25 +10,7 @@ import {
 } from "@/app/auth/bootstrapToken";
 import { hashPassword, serializePasswordRecord } from "@/app/auth/password";
 import { backupNow } from "@/app/backup";
-
-function adminAuth(request: any, reply: any): boolean {
-    const password = process.env.ADMIN_PASSWORD;
-    if (!password) {
-        reply.code(403).send({ error: 'Admin password not configured. Set ADMIN_PASSWORD env var.' });
-        return false;
-    }
-    const authHeader = request.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        reply.code(401).send({ error: 'Authentication required' });
-        return false;
-    }
-    const supplied = authHeader.substring(7);
-    if (supplied !== password) {
-        reply.code(401).send({ error: 'Invalid admin password' });
-        return false;
-    }
-    return true;
-}
+import { adminAuth } from "../utils/adminAuth";
 
 export function adminRoutes(app: Fastify) {
 
@@ -334,6 +316,12 @@ export function adminRoutes(app: Fastify) {
     });
     app.get('/user.js', async (_request, reply) => {
         reply.type('application/javascript').send(readFileSync(process.cwd() + "/user.js", "utf-8"));
+    });
+    app.get('/register', async (_request, reply) => {
+        reply.type('text/html').send(readFileSync(process.cwd() + "/register.html", "utf-8"));
+    });
+    app.get('/register.js', async (_request, reply) => {
+        reply.type('application/javascript').send(readFileSync(process.cwd() + "/register.js", "utf-8"));
     });
     // Locally vendored browser libs (socket.io client, xterm) — avoids CDN
     // flakiness and works on restricted networks.

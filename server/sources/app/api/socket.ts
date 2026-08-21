@@ -17,11 +17,12 @@ import { artifactUpdateHandler } from "./socket/artifactUpdateHandler";
 import { accessKeyHandler } from "./socket/accessKeyHandler";
 import { terminalHandler } from "./socket/terminalHandler";
 import { ccdRpcHandler } from "./socket/ccdRpcHandler";
+import { getAllowedOrigins } from "./utils/allowedOrigins";
 
 export function startSocket(app: Fastify) {
     const io = new Server(app.server, {
         cors: {
-            origin: "*",
+            origin: getAllowedOrigins(),
             methods: ["GET", "POST", "OPTIONS"],
             credentials: true,
             allowedHeaders: ["*"]

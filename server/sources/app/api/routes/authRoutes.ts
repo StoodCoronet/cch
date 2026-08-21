@@ -8,8 +8,13 @@ import { verifyBootstrapToken } from "@/app/auth/bootstrapToken";
 import { randomBytes } from "node:crypto";
 import { verifyPassword, deserializePasswordRecord, type PasswordRecord } from "@/app/auth/password";
 
+// Strict limit for all /v1/auth/* endpoints (credential brute-force protection).
+// The global rate limit is configured in api.ts.
+const authRateLimit = { max: 20, timeWindow: '1 minute' };
+
 export function authRoutes(app: Fastify) {
     app.post('/v1/auth', {
+        config: { rateLimit: authRateLimit },
         schema: {
             body: z.object({
                 publicKey: z.string(),
@@ -42,6 +47,7 @@ export function authRoutes(app: Fastify) {
     });
 
     app.post('/v1/auth/request', {
+        config: { rateLimit: authRateLimit },
         schema: {
             body: z.object({
                 publicKey: z.string(),
@@ -91,6 +97,7 @@ export function authRoutes(app: Fastify) {
 
     // Get auth request status
     app.get('/v1/auth/request/status', {
+        config: { rateLimit: authRateLimit },
         schema: {
             querystring: z.object({
                 publicKey: z.string(),
@@ -129,6 +136,7 @@ export function authRoutes(app: Fastify) {
     // Approve auth request
     app.post('/v1/auth/response', {
         preHandler: app.authenticate,
+        config: { rateLimit: authRateLimit },
         schema: {
             body: z.object({
                 response: z.string(),
@@ -170,6 +178,7 @@ export function authRoutes(app: Fastify) {
 
     // Account auth request
     app.post('/v1/auth/account/request', {
+        config: { rateLimit: authRateLimit },
         schema: {
             body: z.object({
                 publicKey: z.string(),
@@ -216,6 +225,7 @@ export function authRoutes(app: Fastify) {
     // Approve account auth request
     app.post('/v1/auth/account/response', {
         preHandler: app.authenticate,
+        config: { rateLimit: authRateLimit },
         schema: {
             body: z.object({
                 response: z.string(),
@@ -247,6 +257,7 @@ export function authRoutes(app: Fastify) {
     // Bootstrap token auth — exchange a bootstrap token for permanent credentials.
     // Used by cct/happy CLI for self-host setups. No prior auth required.
     app.post('/v1/auth/bootstrap', {
+        config: { rateLimit: authRateLimit },
         schema: {
             body: z.object({
                 token: z.string(),
@@ -282,6 +293,7 @@ export function authRoutes(app: Fastify) {
 
     // Password login — alternative to bootstrap tokens for the web dashboard.
     app.post('/v1/auth/password', {
+        config: { rateLimit: authRateLimit },
         schema: {
             body: z.object({
                 username: z.string().min(1),
