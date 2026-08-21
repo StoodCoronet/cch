@@ -102,3 +102,11 @@ web (xterm.js) ◀─term-output── server ◀── node-ccd daemon ◀─�
 ### 不做
 - 手动 folder（会话天然按 cwd 归属，自动分组已覆盖）。
 - daemon 会话表持久化（resume 走 tag 对齐已等价）。
+
+## 10. 邀请制注册 + 公网安全加固（2026-08-20，bb88ea1）
+
+- 邀请制：admin 在 /admin 生成邀请链接（expiresInHours 默认 168、maxUses 默认 1），受邀者 /register?token= 注册（邮箱即用户名，密码≥8）。存储 = 新 InviteCode model（prisma db push，**无 migration 文件——standalone/生产部署前必须由人手工补 migration**，否则邀请接口报表不存在）。
+- 安全加固：helmet（CSP 暂关）、rate-limit（全局 300/min、/v1/auth/* 和 /v1/invites/* 20/min）、CORS 白名单（ALLOWED_ORIGINS，默认同源）、adminAuth 恒定时间比较。
+- 明确不做：开放注册（vaultwarden 式共识）、单二进制 CLI（node-pty 打不进）、蒲公英/Play 分发。
+- 打包：CLI `npm i -g <tarball>` 后 ccd/cch 可用；Android 本地签名 release APK（keystore 在 android/keystore.properties，未入库，需备份）。
+- 阿里云部署：docker-compose（caddy 自动 HTTPS + server 不暴露端口）+ server/deploy/Caddyfile + DEPLOY_ALIYUN.md 手册。
