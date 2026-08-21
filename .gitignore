@@ -27,3 +27,5 @@ android/build/
 android/app/build/
 android/local.properties
 android/.idea/
+android/keystore.properties
+android/*.keystore

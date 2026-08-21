@@ -1,0 +1,19 @@
+# CCH production reverse proxy (Aliyun ECS).
+# Caddy obtains and renews the TLS certificate automatically — the only
+# requirement is that DOMAIN's DNS A record points at this host and ports
+# 80/443 are open in the security group.
+#
+# DOMAIN is injected from the environment (docker-compose passes it through).
+
+{$DOMAIN} {
+	reverse_proxy cch-server:3005
+
+	# Socket.IO uses WebSocket — Caddy handles the upgrade transparently.
+	# Security headers beyond @fastify/helmet (defense in depth):
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+}

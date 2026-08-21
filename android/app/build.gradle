@@ -15,12 +15,34 @@ android {
         versionName "0.1.0"
     }
 
+    // Release signing: credentials live in keystore.properties (gitignored).
+    // Missing file = unsigned release build (CI/local debug still works).
+    def ksProps = new Properties()
+    def ksFile = rootProject.file('keystore.properties')
+    if (ksFile.exists()) {
+        ksProps.load(new FileInputStream(ksFile))
+    }
+
+    signingConfigs {
+        if (ksFile.exists()) {
+            release {
+                storeFile rootProject.file(ksProps['storeFile'])
+                storePassword System.getenv('SIGNING_STORE_PASSWORD') ?: ksProps['storePassword']
+                keyAlias System.getenv('SIGNING_KEY_ALIAS') ?: ksProps['keyAlias']
+                keyPassword System.getenv('SIGNING_KEY_PASSWORD') ?: ksProps['keyPassword']
+            }
+        }
+    }
+
     buildTypes {
         debug {
             applicationIdSuffix ".debug"
         }
         release {
             minifyEnabled false
+            if (ksFile.exists()) {
+                signingConfig signingConfigs.release
+            }
         }
     }
     buildFeatures {
