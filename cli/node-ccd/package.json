@@ -1,8 +1,21 @@
 {
   "name": "ccd",
-  "version": "1.0.0",
-  "description": "",
+  "version": "0.1.0",
+  "description": "Local daemon + CLI that runs claude sessions in PTYs and mirrors them to a self-hosted cch server",
   "main": "index.js",
+  "bin": {
+    "ccd": "./bin/ccd.js",
+    "cch": "./bin/cch.js"
+  },
+  "files": [
+    "bin",
+    "index.js",
+    "daemon.js",
+    "session.js",
+    "attach.js",
+    "tui.js",
+    "picksession.js"
+  ],
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },

@@ -390,6 +390,7 @@ module.exports = {
     saveConfig,
     bootstrap,
     ipcCall,
+    main,
     CONFIG_DIR,
     CONFIG_FILE,
     CCH_TOKEN_FILE,
