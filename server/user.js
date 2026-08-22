@@ -661,6 +661,77 @@ $("msg-input").addEventListener("keydown", function(e) {
 });
 $("send-btn").onclick = sendMessage;
 
+// ===== Permission approval cards (floating, bottom-right) =====
+
+var permCards = {}; // reqId -> {el, timer}
+
+// Key-argument summary for a tool call (Bash → command, Read/Edit → file_path,
+// else the first string arg), truncated for the card.
+function permKeyArg(toolName, input) {
+    if (!input || typeof input !== "object") return "";
+    var v = input[TOOL_ARG_KEYS[toolName]];
+    if (typeof v !== "string") {
+        for (var k in input) {
+            if (typeof input[k] === "string") { v = input[k]; break; }
+        }
+    }
+    if (typeof v !== "string") return "";
+    v = v.replace(/\s+/g, " ").trim();
+    return v.length > 100 ? v.slice(0, 100) + "…" : v;
+}
+
+function permSessionTitle(sessionId) {
+    var meta = sessionMeta[sessionId] || {};
+    if (meta.title) return meta.title;
+    var found = null;
+    allSessions.forEach(function(s) { if (s.id === sessionId) found = s; });
+    return (found && (found.tag || found.id.slice(0, 10))) || (sessionId || "").slice(0, 10);
+}
+
+function addPermCard(req) {
+    if (!req || !req.reqId || permCards[req.reqId]) return;
+    var box = $("perm-cards");
+    var el = document.createElement("div");
+    el.className = "perm-card";
+    var arg = permKeyArg(req.toolName, req.input);
+    el.innerHTML =
+        '<div class="perm-title">Permission required</div>' +
+        '<div class="perm-tool">' + esc(req.toolName || "tool") + (arg ? '<span class="perm-arg">(' + esc(arg) + ")</span>" : "") + '</div>' +
+        '<div class="perm-session" title="Open session">' + esc(permSessionTitle(req.sessionId)) + '</div>' +
+        '<div class="perm-actions">' +
+            '<button class="perm-allow">Allow</button>' +
+            '<button class="perm-deny">Deny</button>' +
+        '</div>';
+    el.querySelector(".perm-allow").onclick = function() { respondPerm(req.reqId, "allow"); };
+    el.querySelector(".perm-deny").onclick = function() { respondPerm(req.reqId, "deny"); };
+    el.querySelector(".perm-session").onclick = function() {
+        var found = null;
+        allSessions.forEach(function(s) { if (s.id === req.sessionId) found = s; });
+        if (found) selectSession(found);
+    };
+    // Newest on top
+    box.insertBefore(el, box.firstChild);
+    permCards[req.reqId] = { el: el, timer: null };
+}
+
+function removePermCard(reqId) {
+    var card = permCards[reqId];
+    if (!card) return;
+    if (card.timer) clearTimeout(card.timer);
+    card.el.remove();
+    delete permCards[reqId];
+}
+
+function respondPerm(reqId, decision) {
+    var card = permCards[reqId];
+    if (!card || card.timer) return; // already sending
+    if (socket) socket.emit("perm:respond", { reqId: reqId, decision: decision });
+    // Sending state until permission-resolved arrives (3s fallback)
+    card.el.classList.add("sending");
+    card.el.querySelectorAll("button").forEach(function(b) { b.disabled = true; });
+    card.timer = setTimeout(function() { removePermCard(reqId); }, 3000);
+}
+
 // ===== Live terminal overlay (xterm.js over Socket.IO relay) =====
 //
 // Fallback for claude TUI interactions the transcript cannot show (e.g.
@@ -972,6 +1043,11 @@ function initSocket() {
             disposeTerminal();
             joinTerminal(currentSessionId);
         }
+        // Restore pending permission cards (page reloads/reconnects lose them)
+        socket.emit("perm:list", {}, function(ack) {
+            if (!ack || !ack.ok || !Array.isArray(ack.requests)) return;
+            ack.requests.forEach(addPermCard);
+        });
     });
 
     socket.on('connect_error', function(err) {
@@ -987,12 +1063,26 @@ function initSocket() {
     // Session lifecycle/meta (term:state/term:meta) are fanned out to
     // user-scoped connections as ephemeral events (no room join required).
     socket.on('ephemeral', function(payload) {
-        if (!payload || !payload.sessionId) return;
+        if (!payload) return;
+        if (payload.type === 'permission-request') {
+            addPermCard(payload);
+            return;
+        }
+        if (payload.type === 'permission-resolved') {
+            removePermCard(payload.reqId);
+            return;
+        }
+        if (!payload.sessionId) return;
         if (payload.type === 'terminal-state') {
             applySessionState(payload.sessionId, payload.state, payload.exitCode);
         } else if (payload.type === 'terminal-meta') {
             applySessionMeta(payload.sessionId, payload.meta);
         }
+    });
+
+    socket.on('perm:request', function(msg) {
+        if (!msg || !msg.reqId) return;
+        addPermCard(msg);
     });
 
     socket.on('term:output', function(msg) {

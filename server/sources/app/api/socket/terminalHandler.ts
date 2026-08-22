@@ -1,4 +1,4 @@
-import { buildTerminalMetaEphemeral, buildTerminalStateEphemeral, eventRouter } from "@/app/events/eventRouter";
+import { buildPermissionRequestEphemeral, buildPermissionResolvedEphemeral, buildTerminalMetaEphemeral, buildTerminalStateEphemeral, eventRouter } from "@/app/events/eventRouter";
 import { log } from "@/utils/log";
 import { Server, Socket } from "socket.io";
 
@@ -32,6 +32,24 @@ interface TermSession {
 const SCROLLBACK_LIMIT = 256_000;
 
 const termSessions = new Map<string, TermSession>();
+
+// === PERMISSION RELAY STATE ===
+//
+// Pending tool-permission requests pushed by daemons, waiting for a web
+// decision. Keyed by reqId; entries are removed on respond/resolve or when
+// the owning daemon socket disconnects.
+
+interface PendingPermission {
+    userId: string;
+    sessionId: string;
+    reqId: string;
+    toolName: string;
+    input: any;
+    ownerSocketId: string;   // daemon socket that raised the request
+    at: number;
+}
+
+const pendingPermissions = new Map<string, PendingPermission>();
 
 function termKey(userId: string, sessionId: string): string {
     return `${userId}:${sessionId}`;
@@ -283,12 +301,139 @@ export function terminalHandler(userId: string, socket: Socket, io: Server) {
         }
     });
 
+    // === PERMISSION RELAY ===
+
+    // Daemon asks for a tool permission decision
+    socket.on('perm:request', (data: any) => {
+        try {
+            if (clientType !== 'machine-scoped') {
+                return;
+            }
+            const { sessionId, reqId, toolName, input } = data ?? {};
+            if (!sessionId || typeof sessionId !== 'string'
+                || !reqId || typeof reqId !== 'string'
+                || !toolName || typeof toolName !== 'string') {
+                return;
+            }
+            const session = termSessions.get(termKey(userId, sessionId));
+            if (!session || session.ownerSocketId !== socket.id) {
+                return; // only the owning daemon may raise requests for a session
+            }
+            pendingPermissions.set(reqId, {
+                userId,
+                sessionId,
+                reqId,
+                toolName,
+                input,
+                ownerSocketId: socket.id,
+                at: Date.now()
+            });
+            eventRouter.emitEphemeral({
+                userId,
+                payload: buildPermissionRequestEphemeral(sessionId, reqId, toolName, input),
+                recipientFilter: { type: 'user-scoped-only' }
+            });
+            // Belt and braces: also notify sockets joined to the term room
+            io.to(termRoom(userId, sessionId)).emit('perm:request', { sessionId, reqId, toolName, input });
+        } catch (error) {
+            log({ module: 'websocket', level: 'error' }, `Error in perm:request: ${error}`);
+        }
+    });
+
+    // Web client answers a pending request
+    socket.on('perm:respond', (data: any) => {
+        try {
+            const { reqId, decision } = data ?? {};
+            if (!reqId || typeof reqId !== 'string' || (decision !== 'allow' && decision !== 'deny')) {
+                return;
+            }
+            const pending = pendingPermissions.get(reqId);
+            if (!pending || pending.userId !== userId) {
+                return; // not ours — userId isolation
+            }
+            pendingPermissions.delete(reqId);
+            const owner = io.sockets.sockets.get(pending.ownerSocketId);
+            if (owner) {
+                owner.emit('perm:respond', { reqId, decision });
+            }
+            eventRouter.emitEphemeral({
+                userId,
+                payload: buildPermissionResolvedEphemeral(reqId, decision, 'web'),
+                recipientFilter: { type: 'user-scoped-only' }
+            });
+        } catch (error) {
+            log({ module: 'websocket', level: 'error' }, `Error in perm:respond: ${error}`);
+        }
+    });
+
+    // Daemon reports a request was settled without a web decision
+    // (local approve, timeout, etc.) so web clients can drop the card
+    socket.on('perm:resolve', (data: any) => {
+        try {
+            if (clientType !== 'machine-scoped') {
+                return;
+            }
+            const { reqId, decision, source } = data ?? {};
+            if (!reqId || typeof reqId !== 'string') {
+                return;
+            }
+            const pending = pendingPermissions.get(reqId);
+            if (!pending || pending.userId !== userId || pending.ownerSocketId !== socket.id) {
+                return;
+            }
+            pendingPermissions.delete(reqId);
+            eventRouter.emitEphemeral({
+                userId,
+                payload: buildPermissionResolvedEphemeral(
+                    reqId,
+                    (decision === 'allow' || decision === 'deny') ? decision : undefined,
+                    (source === 'timeout' || source === 'local') ? source : 'local'
+                ),
+                recipientFilter: { type: 'user-scoped-only' }
+            });
+        } catch (error) {
+            log({ module: 'websocket', level: 'error' }, `Error in perm:resolve: ${error}`);
+        }
+    });
+
+    // Web client (re)loads and needs the current pending set
+    socket.on('perm:list', (data: any, callback: (response: any) => void) => {
+        try {
+            const requests = [...pendingPermissions.values()]
+                .filter((p) => p.userId === userId)
+                .map((p) => ({
+                    reqId: p.reqId,
+                    sessionId: p.sessionId,
+                    toolName: p.toolName,
+                    input: p.input,
+                    at: p.at
+                }));
+            if (callback) callback({ ok: true, requests });
+        } catch (error) {
+            log({ module: 'websocket', level: 'error' }, `Error in perm:list: ${error}`);
+            if (callback) callback({ ok: false, error: 'internal error' });
+        }
+    });
+
     // === DISCONNECT CLEANUP ===
 
     socket.on('disconnect', () => {
         try {
             if (clientType !== 'machine-scoped') {
                 return;
+            }
+            // Drop this daemon's pending permission requests and tell web
+            // clients to clear the cards
+            for (const pending of [...pendingPermissions.values()]) {
+                if (pending.ownerSocketId !== socket.id) {
+                    continue;
+                }
+                pendingPermissions.delete(pending.reqId);
+                eventRouter.emitEphemeral({
+                    userId,
+                    payload: buildPermissionResolvedEphemeral(pending.reqId, undefined, 'daemon-disconnected'),
+                    recipientFilter: { type: 'user-scoped-only' }
+                });
             }
             // Mark every session owned by this daemon socket as offline.
             // Scrollback is preserved; a re-register on reconnect flips

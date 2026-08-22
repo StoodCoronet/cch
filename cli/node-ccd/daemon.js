@@ -38,6 +38,7 @@ const CLAUDE_BIN = process.env.CCD_CLAUDE_BIN ||
 
 const startedAt = Date.now();
 const sessions = new Map(); // sessionId -> session object
+const pendingPermissions = new Map(); // reqId -> pending permission request
 
 let server = null;
 let authToken = null;
@@ -158,6 +159,11 @@ async function finalizeServerSession(session) {
         }).catch(e => console.error(`activity ping failed: ${e.message}`));
         emitTermRegister(session);
         emitTermMeta(session);
+        // Flush permission requests that arrived before the server session
+        // existed (perm:request carries the server sessionId)
+        for (const entry of pendingPermissions.values()) {
+            if (entry.session === session) emitPermRequest(entry);
+        }
         // Flush buffered PTY output so early claude output reaches the server
         if (session.pendingOutput) {
             socket && socket.connected && socket.emit('term:output', { sessionId, data: session.pendingOutput });
@@ -183,15 +189,104 @@ async function finalizeServerSession(session) {
     }
 }
 
+// --- Permission bridge (claude PreToolUse hook -> web) ---
+// Each spawned session gets a generated claude settings file registering
+// hook.js as a PreToolUse hook. The hook calls back over IPC (keyed by
+// localId via CCD_SESSION_ID); we forward to the server as perm:request and
+// wait for perm:respond. Timeout / disconnect -> 'ask', which makes the hook
+// print nothing so claude shows its local TUI approval prompt.
+function hookSettingsPath(localId) {
+    return path.join(CONFIG_DIR, 'hooks', `${localId}.json`);
+}
+
+function writeHookSettings(localId) {
+    fs.mkdirSync(path.join(CONFIG_DIR, 'hooks'), { recursive: true });
+    const file = hookSettingsPath(localId);
+    const settings = {
+        hooks: {
+            PreToolUse: [
+                {
+                    matcher: '*',
+                    hooks: [{ type: 'command', command: `"${process.execPath}" "${path.join(__dirname, 'hook.js')}"`, timeout: 60 }],
+                },
+            ],
+        },
+    };
+    fs.writeFileSync(file, JSON.stringify(settings, null, 2));
+    return file;
+}
+
+function removeHookSettings(localId) {
+    try {
+        fs.unlinkSync(hookSettingsPath(localId));
+    } catch (e) { /* ignore */ }
+}
+
+function emitPermRequest(entry) {
+    if (entry.sent || !entry.session.serverReady) return;
+    if (!socket || !socket.connected) return;
+    entry.sent = true;
+    socket.emit('perm:request', {
+        sessionId: entry.session.sessionId,
+        reqId: entry.reqId,
+        toolName: entry.toolName,
+        input: entry.toolInput,
+        meta: sessionMeta(entry.session),
+    });
+}
+
+// IPC 'permission' handler: holds the response until the web decides or the
+// 55s timeout fires (hook.js has the same cap; the hook prints nothing on
+// 'ask' so claude falls back to its local prompt).
+function handlePermissionRequest(msg) {
+    // The hook knows the session by localId (CCD_SESSION_ID); the sessions
+    // map may already be re-keyed on the server sessionId, so scan values.
+    const session = [...sessions.values()].find(s => s.localId === msg.ccdSessionId);
+    if (!session || session.state === 'exited') {
+        return Promise.resolve({ ok: true, decision: 'ask' });
+    }
+    const reqId = crypto.randomUUID();
+    return new Promise((resolve) => {
+        const entry = {
+            reqId,
+            session,
+            toolName: msg.toolName || null,
+            toolInput: msg.toolInput !== undefined ? msg.toolInput : null,
+            sent: false,
+            settled: false,
+            timer: null,
+            settle: null,
+        };
+        entry.settle = (decision, source) => {
+            if (entry.settled) return;
+            entry.settled = true;
+            clearTimeout(entry.timer);
+            pendingPermissions.delete(reqId);
+            console.log(`permission ${reqId} settled: ${decision} (${source})`);
+            if (socket && socket.connected) {
+                socket.emit('perm:resolve', { reqId, decision, source });
+            }
+            resolve({ ok: true, decision });
+        };
+        entry.timer = setTimeout(() => entry.settle('ask', 'timeout'), 55000);
+        pendingPermissions.set(reqId, entry);
+        console.log(`permission request ${reqId}: tool=${entry.toolName} (session=${session.sessionId || session.localId})`);
+        emitPermRequest(entry);
+    });
+}
+
 // --- Session lifecycle ---
 // resumeId (an explicit claudeSessionId) takes priority over the resume bool,
 // which keeps its original meaning: resume the latest jsonl for this cwd.
 function spawnSession({ profile, cwd, cols, rows, resume, resumeId }) {
+    const localId = 'tmp-' + crypto.randomUUID();
     const env = {
         ...process.env,
         ...(profile.env || {}),
         ...(profile.model ? { ANTHROPIC_MODEL: profile.model } : {}),
         ...(profile.base_url ? { ANTHROPIC_BASE_URL: profile.base_url } : {}),
+        // The PreToolUse hook (hook.js) uses this to call back over IPC
+        CCD_SESSION_ID: localId,
     };
     // The daemon is often started detached (no TTY), so process.env may lack
     // TERM or carry NO_COLOR — claude then renders without colors. Force a
@@ -210,9 +305,11 @@ function spawnSession({ profile, cwd, cols, rows, resume, resumeId }) {
     if (profile.model) claudeArgs.push('--model', profile.model);
     if (profile.skip_permissions) claudeArgs.push('--dangerously-skip-permissions');
     if (resumeClaudeSessionId) claudeArgs.push('--resume', resumeClaudeSessionId);
+    // Register our PreToolUse hook for this session (web permission bridge)
+    const hookFile = writeHookSettings(localId);
+    claudeArgs.push('--settings', hookFile);
     if (profile.extra_args && profile.extra_args.length) claudeArgs.push(...profile.extra_args);
 
-    const localId = 'tmp-' + crypto.randomUUID();
     const session = {
         localId,
         sessionId: null,
@@ -233,6 +330,7 @@ function spawnSession({ profile, cwd, cols, rows, resume, resumeId }) {
         pendingMessages: [],
         pendingOutput: '',
         spawnResolve: null,
+        hookFile,
     };
     sessions.set(localId, session);
 
@@ -255,6 +353,7 @@ function spawnSession({ profile, cwd, cols, rows, resume, resumeId }) {
         session.state = 'exited';
         session.exitCode = code;
         if (session.watcher) session.watcher.stop();
+        removeHookSettings(session.localId);
         console.log(`session exited: ${session.sessionId || session.localId} code=${code}`);
         emitTermState(session, 'exited', code);
         for (const conn of session.attachSockets) {
@@ -305,6 +404,7 @@ function killSession(session, reason) {
     console.log(`killing session ${session.sessionId || session.localId}: ${reason || ''}`);
     try { session.pty.kill(); } catch (e) { /* ignore */ }
     if (session.watcher) session.watcher.stop();
+    removeHookSettings(session.localId);
     session.state = 'exited';
     emitTermState(session, 'exited');
     for (const conn of session.attachSockets) {
@@ -387,6 +487,8 @@ function connectServer() {
                 emitTermState(session, session.state, session.exitCode === null ? undefined : session.exitCode);
             }
         }
+        // Retry permission requests that couldn't be sent while disconnected
+        for (const entry of pendingPermissions.values()) emitPermRequest(entry);
     });
 
     socket.on('disconnect', (reason) => {
@@ -408,6 +510,14 @@ function connectServer() {
         session.cols = payload.cols;
         session.rows = payload.rows;
         session.pty.resize(payload.cols, payload.rows);
+    });
+
+    // Web's answer to a perm:request, forwarded by the server
+    socket.on('perm:respond', (payload) => {
+        const entry = payload && pendingPermissions.get(payload.reqId);
+        if (!entry) return;
+        const decision = payload.decision === 'allow' || payload.decision === 'deny' ? payload.decision : 'ask';
+        entry.settle(decision, 'web');
     });
 
     socket.on('ccd:rpc', (msg) => {
@@ -522,6 +632,11 @@ async function handleCommand(conn, msg) {
             if (!session) return { ok: false, error: 'session not found' };
             killSession(session, 'ipc kill');
             return { ok: true };
+        }
+        case 'permission': {
+            // Holds the IPC response until the web decides or the 55s
+            // timeout fires — see handlePermissionRequest.
+            return handlePermissionRequest(msg);
         }
         case 'status': {
             return {
@@ -640,6 +755,7 @@ function shutdown(code) {
     for (const session of sessions.values()) {
         try { session.pty.kill(); } catch (e) { /* ignore */ }
         if (session.watcher) session.watcher.stop();
+        removeHookSettings(session.localId);
     }
     if (socket) socket.disconnect();
     try { fs.unlinkSync(PID_FILE); } catch (e) { /* ignore */ }

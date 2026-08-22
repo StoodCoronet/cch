@@ -204,6 +204,19 @@ export type EphemeralEvent = {
     body: string;
     timestamp: number;
 } | {
+    type: 'permission-request';
+    sessionId: string;
+    reqId: string;
+    toolName: string;
+    input: any;
+    timestamp: number;
+} | {
+    type: 'permission-resolved';
+    reqId: string;
+    decision?: 'allow' | 'deny';
+    source: 'web' | 'timeout' | 'local' | 'daemon-disconnected';
+    timestamp: number;
+} | {
     type: 'terminal-state';
     sessionId: string;
     state: 'running' | 'exited' | 'offline';
@@ -604,6 +617,35 @@ export function buildSessionEventEphemeral(sessionId: string, kind: 'done' | 'pe
         kind,
         title,
         body,
+        timestamp: Date.now()
+    };
+}
+
+/**
+ * Tool permission request relayed from a machine-scoped daemon to the user's
+ * web clients. The card stays up until a matching permission-resolved arrives.
+ */
+export function buildPermissionRequestEphemeral(sessionId: string, reqId: string, toolName: string, input: any): EphemeralPayload {
+    return {
+        type: 'permission-request',
+        sessionId,
+        reqId,
+        toolName,
+        input,
+        timestamp: Date.now()
+    };
+}
+
+/**
+ * A pending permission request was answered (web), auto-resolved (timeout),
+ * handled locally on the daemon, or dropped because the daemon disconnected.
+ */
+export function buildPermissionResolvedEphemeral(reqId: string, decision: 'allow' | 'deny' | undefined, source: 'web' | 'timeout' | 'local' | 'daemon-disconnected'): EphemeralPayload {
+    return {
+        type: 'permission-resolved',
+        reqId,
+        decision,
+        source,
         timestamp: Date.now()
     };
 }
