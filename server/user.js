@@ -805,9 +805,118 @@ function loginWithPassword() {
         if (!r.ok) return r.json().then(function(e) { throw new Error(e.error || "Invalid"); });
         return r.json();
     }).then(finishLogin).catch(function(e) {
+        err.style.color = "";
         err.textContent = e.message; btn.textContent = "Sign In"; btn.disabled = false;
     });
 }
+
+// ===== Password reset + Google sign-in (login card extras) =====
+
+// Unauthenticated POST helper; surfaces rate limiting and backend error text.
+function publicPost(path, body) {
+    return fetch(SERVER + path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+    }).then(function(r) {
+        if (r.status === 429) {
+            throw new Error("Too many requests — please try again later");
+        }
+        return r.json().catch(function() {
+            throw new Error(r.statusText || "Request failed");
+        }).then(function(d) {
+            if (!r.ok) throw new Error(d.error || r.statusText || "Request failed");
+            return d;
+        });
+    });
+}
+
+$("forgot-link").onclick = function() {
+    $("password-form").classList.remove("active");
+    document.querySelector(".connect-tabs").classList.add("hidden");
+    $("reset-form").classList.add("active");
+    $("reset-step1").classList.remove("hidden");
+    $("reset-step2").classList.add("hidden");
+    $("reset-error").textContent = "";
+    $("reset-email").focus();
+};
+
+$("reset-back").onclick = function() {
+    $("reset-form").classList.remove("active");
+    document.querySelector(".connect-tabs").classList.remove("hidden");
+    $("password-form").classList.add("active");
+};
+
+function sendResetCode() {
+    var email = $("reset-email").value.trim();
+    if (!email) { $("reset-error").textContent = "Please enter your email"; return; }
+    $("reset-error").textContent = "";
+    var btn = $("reset-send-btn");
+    btn.disabled = true;
+    btn.textContent = "Sending...";
+    // Always {ok:true} server-side (no account enumeration)
+    publicPost("/v1/auth/request-reset", { email: email }).then(function(d) {
+        btn.disabled = false;
+        btn.textContent = "Send reset code";
+        $("reset-step1").classList.add("hidden");
+        $("reset-step2").classList.remove("hidden");
+        $("reset-info").textContent = "Code sent to " + email;
+        var dev = $("reset-dev-code");
+        if (d && d.devCode) {
+            dev.textContent = "Dev code: " + d.devCode;
+            dev.classList.remove("hidden");
+        } else {
+            dev.classList.add("hidden");
+        }
+        $("reset-code").focus();
+    }).catch(function(e) {
+        $("reset-error").textContent = e.message;
+        btn.disabled = false;
+        btn.textContent = "Send reset code";
+    });
+}
+
+function submitReset() {
+    var email = $("reset-email").value.trim();
+    var code = $("reset-code").value.trim();
+    var password = $("reset-password").value;
+    if (!/^\d{6}$/.test(code)) { $("reset-error").textContent = "Please enter the 6-digit code"; return; }
+    if (password.length < 8) { $("reset-error").textContent = "Password must be at least 8 characters"; return; }
+    $("reset-error").textContent = "";
+    var btn = $("reset-submit-btn");
+    btn.disabled = true;
+    btn.textContent = "Resetting...";
+    publicPost("/v1/auth/reset", { email: email, code: code, password: password }).then(function() {
+        btn.disabled = false;
+        btn.textContent = "Reset password";
+        $("reset-back").onclick();
+        var le = $("login-error");
+        le.style.color = "var(--green)";
+        le.textContent = "Password reset — sign in with your new password";
+    }).catch(function(e) {
+        $("reset-error").textContent = e.message;
+        btn.disabled = false;
+        btn.textContent = "Reset password";
+    });
+}
+
+$("reset-send-btn").onclick = sendResetCode;
+$("reset-email").onkeydown = function(e) { if (e.key === "Enter") sendResetCode(); };
+$("reset-submit-btn").onclick = submitReset;
+$("reset-password").onkeydown = function(e) { if (e.key === "Enter") submitReset(); };
+$("reset-code").onkeydown = function(e) { if (e.key === "Enter") submitReset(); };
+
+// Show the Google button only when OAuth is configured (501 = not configured).
+(function probeGoogle() {
+    fetch(SERVER + "/v1/auth/google", { redirect: "manual" }).then(function(r) {
+        if (r.type === "opaqueredirect" || (r.status >= 300 && r.status < 400)) {
+            $("google-btn").classList.remove("hidden");
+        }
+    }).catch(function() {});
+})();
+$("google-btn").onclick = function() {
+    window.location.href = SERVER + "/v1/auth/google";
+};
 
 // Connect
 function connect() {

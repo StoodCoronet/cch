@@ -156,6 +156,7 @@ function loadInvites() {
                 '<td style="white-space:nowrap">' +
                     (link ? '<button class="copy-btn" data-link="' + esc(link) + '">Copy link</button>' : '') +
                     (status === "active" ? '<button class="revoke-btn" data-id="' + esc(String(inv.id)) + '">Revoke</button>' : '') +
+                    '<button class="delete-btn" data-id="' + esc(String(inv.id)) + '">Delete</button>' +
                 "</td>";
             tbody.appendChild(row);
         });
@@ -169,6 +170,9 @@ function loadInvites() {
         });
         tbody.querySelectorAll(".revoke-btn").forEach(function(btn) {
             btn.onclick = function() { revokeInvite(btn.dataset.id); };
+        });
+        tbody.querySelectorAll(".delete-btn").forEach(function(btn) {
+            btn.onclick = function() { deleteInvite(btn.dataset.id); };
         });
     }).catch(function(e) { console.error(e); });
 }
@@ -195,6 +199,12 @@ function createInvite() {
 function revokeInvite(id) {
     if (!confirm("Revoke this invite? It can no longer be used to register.")) return;
     api("POST", "/v1/admin/invites/" + id + "/revoke").then(loadInvites).catch(function(e) { alert(e.message); });
+}
+
+// Hard delete — the row disappears entirely, unlike revoke which keeps it listed.
+function deleteInvite(id) {
+    if (!confirm("Permanently delete this invite? This cannot be undone (revoked invites can stay listed; delete removes the record).")) return;
+    api("DELETE", "/v1/admin/invites/" + id).then(loadInvites).catch(function(e) { alert(e.message); });
 }
 
 $("create-invite-btn").onclick = createInvite;

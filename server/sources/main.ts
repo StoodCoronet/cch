@@ -3,12 +3,14 @@ import { log } from "@/utils/log";
 import { awaitShutdown, onShutdown } from "@/utils/shutdown";
 import { db } from './storage/db';
 import { startTimeout } from "./app/presence/timeout";
+import { startMessageSweeper } from "./app/messages/messageSweeper";
 import { startMetricsServer } from "@/app/monitoring/metrics";
 import { activityCache } from "@/app/presence/sessionCache";
 import { auth } from "./app/auth/auth";
 import { startDatabaseMetricsUpdater } from "@/app/monitoring/metrics2";
 import { initEncrypt } from "./modules/encrypt";
 import { initGithub } from "./modules/github";
+import { initMailer } from "./modules/mailer";
 import { loadFiles } from "./storage/files";
 
 async function main() {
@@ -30,6 +32,7 @@ async function main() {
     // Initialize auth module
     await initEncrypt();
     await initGithub();
+    initMailer();
     await loadFiles();
     await auth.init();
 
@@ -41,6 +44,7 @@ async function main() {
     await startMetricsServer();
     startDatabaseMetricsUpdater();
     startTimeout();
+    startMessageSweeper();
 
     //
     // Ready

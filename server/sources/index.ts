@@ -3,12 +3,14 @@ import "reflect-metadata";
 import { db } from "./storage/db";
 import { initEncrypt } from "./modules/encrypt";
 import { initGithub } from "./modules/github";
+import { initMailer } from "./modules/mailer";
 import { loadFiles } from "./storage/files";
 import { auth } from "./app/auth/auth";
 import { activityCache } from "./app/presence/sessionCache";
 import { startApi, StartApiOptions } from "./app/api/api";
 import { startDatabaseMetricsUpdater } from "./app/monitoring/metrics2";
 import { startTimeout } from "./app/presence/timeout";
+import { startMessageSweeper } from "./app/messages/messageSweeper";
 import { onShutdown } from "./utils/shutdown";
 
 export { runMigrations } from "./standalone";
@@ -34,6 +36,7 @@ export async function startServer(opts: StartServerOptions): Promise<{ port: num
 
     await initEncrypt();
     await initGithub();
+    initMailer();
     await loadFiles();
     await auth.init();
 
@@ -45,6 +48,7 @@ export async function startServer(opts: StartServerOptions): Promise<{ port: num
     });
     startDatabaseMetricsUpdater();
     startTimeout();
+    startMessageSweeper();
 
     return { port, host };
 }

@@ -329,6 +329,8 @@ export function adminRoutes(app: Fastify) {
         '.js': 'application/javascript',
         '.css': 'text/css',
         '.map': 'application/json',
+        '.png': 'image/png',
+        '.webmanifest': 'application/manifest+json',
     };
     app.get('/vendor/:file', async (request, reply) => {
         const file = (request.params as any).file as string;

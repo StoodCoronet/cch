@@ -53,6 +53,11 @@ button,input{font-family:inherit;font-size:inherit}
 .card button:hover{background:var(--accent-hover)}
 .card button:disabled{background:var(--bg-input);color:var(--fg-tertiary);cursor:not-allowed}
 .error{color:var(--red);font-size:13px;margin-top:8px;text-align:center}
+.dev-line{font-size:12px;color:var(--fg-tertiary);text-align:center;margin-top:8px;font-family:"SF Mono","Fira Code",monospace}
+.resend-line{text-align:center;margin-top:14px;font-size:13px}
+.resend-line a{color:var(--accent-light);cursor:pointer;text-decoration:none}
+.resend-line a:hover{text-decoration:underline}
+.resend-line a.disabled{color:var(--fg-tertiary);pointer-events:none}
 .big-message{text-align:center;color:var(--fg-secondary);font-size:15px;line-height:1.7}
 .big-message .icon{font-size:34px;display:block;margin-bottom:12px}
 .big-message a{color:var(--accent-light);text-decoration:none;font-weight:600}
@@ -80,6 +85,18 @@ button,input{font-family:inherit;font-size:inherit}
         <input id="confirm-input" type="password" placeholder="Confirm password" autocomplete="new-password">
         <button id="register-btn">Register</button>
         <p class="error" id="form-error"></p>
+    </div>
+</div>
+
+<div class="screen hidden" id="verify-screen">
+    <div class="card">
+        <div class="logo-wrap"><div class="logo-mark"></div><h1>CCH</h1></div>
+        <p class="sub">Verification code sent to <span id="verify-email"></span></p>
+        <input id="code-input" type="text" placeholder="6-digit code" autocomplete="one-time-code" maxlength="6">
+        <button id="verify-btn">Verify</button>
+        <p class="error" id="verify-error"></p>
+        <p class="dev-line hidden" id="dev-code"></p>
+        <p class="resend-line"><a id="resend-link">Resend code</a></p>
     </div>
 </div>
 

@@ -558,6 +558,24 @@ export function sessionRoutes(app: Fastify) {
             },
         });
 
+        // Rolling per-session cap (cache semantics, not an archive): keep only
+        // the newest MESSAGE_CAP_PER_SESSION (default 500) messages.
+        const cap = parseInt(process.env.MESSAGE_CAP_PER_SESSION || '500', 10);
+        const keep = await db.plaintextMessage.findMany({
+            where: { sessionId: request.params.sessionId },
+            orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+            take: cap,
+            select: { id: true },
+        });
+        if (keep.length === cap) {
+            await db.plaintextMessage.deleteMany({
+                where: {
+                    sessionId: request.params.sessionId,
+                    id: { notIn: keep.map((m) => m.id) },
+                },
+            });
+        }
+
         // Bump session activity so the web sidebar re-orders on new messages
         // (updatedAt is @updatedAt and moves automatically)
         await db.session.update({

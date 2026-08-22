@@ -2,8 +2,17 @@
 <html lang="en" data-theme="light">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>CCH</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>ccc</title>
+<!-- PWA: installable on iOS (Add to Home Screen) and Android -->
+<link rel="manifest" href="/vendor/manifest.webmanifest">
+<meta name="theme-color" content="#4f46e5">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="ccc">
+<link rel="apple-touch-icon" href="/vendor/icon-180.png">
+<link rel="icon" type="image/png" href="/vendor/icon-180.png">
 <link rel="stylesheet" href="/vendor/xterm.css">
 <style>
 :root {
@@ -253,6 +262,13 @@ button,input,textarea,select{font-family:inherit;font-size:inherit}
 .connect-card .connect-form button{width:100%;padding:12px;border-radius:10px;border:none;background:var(--accent);color:#fff;font-weight:600;cursor:pointer;font-size:15px}
 .connect-card .connect-form button:hover{background:var(--accent-hover)}
 .connect-card .error{color:var(--red);font-size:13px;margin-top:8px;text-align:center}
+.login-links{text-align:center;margin-top:12px;font-size:13px}
+.login-links a{color:var(--accent-light);cursor:pointer;text-decoration:none}
+.login-links a:hover{text-decoration:underline}
+.google-btn{margin-top:14px;display:flex;align-items:center;justify-content:center;gap:8px;background:var(--bg)!important;color:var(--fg)!important;border:1px solid var(--border)!important}
+.google-btn:hover{background:var(--bg-hover)!important}
+.reset-info{text-align:center;color:var(--fg-secondary);font-size:13px;margin-bottom:12px}
+.dev-code{font-size:12px;color:var(--fg-tertiary);text-align:center;margin-top:8px;font-family:"SF Mono","Fira Code",monospace}
 .connect-hint{text-align:center;font-size:12px;color:var(--fg-secondary);margin-top:14px}
 
 /* Device connect modal */
@@ -356,6 +372,23 @@ select.modal-input{margin-bottom:0}
         <input id="login-password" type="password" placeholder="Password">
         <button id="login-btn">Sign In</button>
         <p class="error" id="login-error"></p>
+        <div class="login-links"><a id="forgot-link">Forgot password?</a></div>
+        <button id="google-btn" class="google-btn hidden">Sign in with Google</button>
+      </div>
+      <div class="connect-form" id="reset-form">
+        <div id="reset-step1">
+          <input id="reset-email" type="email" placeholder="Email">
+          <button id="reset-send-btn">Send reset code</button>
+        </div>
+        <div id="reset-step2" class="hidden">
+          <p class="reset-info" id="reset-info"></p>
+          <input id="reset-code" type="text" placeholder="6-digit code" autocomplete="one-time-code" maxlength="6">
+          <input id="reset-password" type="password" placeholder="New password (min 8 chars)">
+          <button id="reset-submit-btn">Reset password</button>
+          <p class="dev-code hidden" id="reset-dev-code"></p>
+        </div>
+        <p class="error" id="reset-error"></p>
+        <div class="login-links"><a id="reset-back">← Back to sign in</a></div>
       </div>
     </div>
   </div>

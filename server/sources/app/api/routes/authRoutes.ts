@@ -6,7 +6,9 @@ import { auth } from "@/app/auth/auth";
 import { log } from "@/utils/log";
 import { verifyBootstrapToken } from "@/app/auth/bootstrapToken";
 import { randomBytes } from "node:crypto";
-import { verifyPassword, deserializePasswordRecord, type PasswordRecord } from "@/app/auth/password";
+import { verifyPassword, deserializePasswordRecord, hashPassword, serializePasswordRecord, type PasswordRecord } from "@/app/auth/password";
+import { issueEmailCode, verifyEmailCode, issueOAuthState, consumeOAuthState } from "@/app/auth/emailCode";
+import { sendCodeEmail, isDevCodesEnabled } from "@/modules/mailer";
 
 // Strict limit for all /v1/auth/* endpoints (credential brute-force protection).
 // The global rate limit is configured in api.ts.
@@ -324,6 +326,170 @@ export function authRoutes(app: Fastify) {
 
         const authToken = await auth.createToken(account.id, { password: true });
         return reply.send({ token: authToken, accountId: account.id });
+    });
+
+    // Request a password reset code (public, rate-limited). Always returns
+    // ok:true whether or not the account exists, to avoid account enumeration.
+    app.post('/v1/auth/request-reset', {
+        config: { rateLimit: authRateLimit },
+        schema: {
+            body: z.object({
+                email: z.string().email().max(254),
+            }),
+        },
+    }, async (request, reply) => {
+        const { email } = request.body;
+        const account = await db.account.findUnique({
+            where: { username: email },
+        });
+        if (account) {
+            const code = await issueEmailCode('reset', email);
+            await sendCodeEmail(email, code, 'reset');
+            if (isDevCodesEnabled()) {
+                log({ module: 'auth' }, `dev reset code for ${email}: ${code}`);
+                return reply.send({ ok: true, devCode: code });
+            }
+        }
+        return reply.send({ ok: true });
+    });
+
+    // Reset password with an emailed code (public, rate-limited).
+    app.post('/v1/auth/reset', {
+        config: { rateLimit: authRateLimit },
+        schema: {
+            body: z.object({
+                email: z.string().email().max(254),
+                code: z.string().min(6).max(6),
+                password: z.string().min(8).max(128),
+            }),
+        },
+    }, async (request, reply) => {
+        const { email, code, password } = request.body;
+
+        const codeOk = await verifyEmailCode('reset', email, code);
+        if (!codeOk) {
+            return reply.send({ ok: false, error: 'invalid or expired code' });
+        }
+        const account = await db.account.findUnique({
+            where: { username: email },
+        });
+        if (!account) {
+            return reply.send({ ok: false, error: 'invalid or expired code' });
+        }
+        await db.account.update({
+            where: { id: account.id },
+            data: { passwordHash: serializePasswordRecord(await hashPassword(password)) },
+        });
+        return reply.send({ ok: true });
+    });
+
+    // Google OAuth login (web dashboard). 501 unless GOOGLE_CLIENT_ID and
+    // GOOGLE_CLIENT_SECRET are configured; the login page hides the button then.
+    app.get('/v1/auth/google', {
+        config: { rateLimit: authRateLimit },
+    }, async (request, reply) => {
+        const clientId = process.env.GOOGLE_CLIENT_ID;
+        const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+        if (!clientId || !clientSecret) {
+            return reply.code(501).send({ error: 'Google login not configured' });
+        }
+
+        const baseUrl = process.env.PUBLIC_URL || (request.protocol + '://' + request.host);
+        const state = await issueOAuthState();
+        const params = new URLSearchParams({
+            client_id: clientId,
+            redirect_uri: `${baseUrl}/v1/auth/google/callback`,
+            response_type: 'code',
+            scope: 'openid email profile',
+            state
+        });
+        return reply.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`);
+    });
+
+    app.get('/v1/auth/google/callback', {
+        config: { rateLimit: authRateLimit },
+        schema: {
+            querystring: z.object({
+                code: z.string().optional(),
+                state: z.string().optional(),
+                error: z.string().optional()
+            })
+        }
+    }, async (request, reply) => {
+        const clientId = process.env.GOOGLE_CLIENT_ID;
+        const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+        if (!clientId || !clientSecret) {
+            return reply.code(501).send({ error: 'Google login not configured' });
+        }
+
+        const { code, state } = request.query;
+        if (!code || !state || !(await consumeOAuthState(state))) {
+            return reply.code(400).send({ error: 'Invalid or expired state' });
+        }
+
+        const baseUrl = process.env.PUBLIC_URL || (request.protocol + '://' + request.host);
+        const tokenResp = await fetch('https://oauth2.googleapis.com/token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({
+                client_id: clientId,
+                client_secret: clientSecret,
+                code,
+                grant_type: 'authorization_code',
+                redirect_uri: `${baseUrl}/v1/auth/google/callback`
+            })
+        });
+        if (!tokenResp.ok) {
+            log({ module: 'auth', level: 'warn' }, `Google code exchange failed: ${tokenResp.status}`);
+            return reply.code(401).send({ error: 'Failed to exchange code' });
+        }
+        const tokenData = await tokenResp.json() as { access_token?: string };
+        if (!tokenData.access_token) {
+            return reply.code(401).send({ error: 'Failed to exchange code' });
+        }
+
+        const userResp = await fetch('https://openidconnect.googleapis.com/v1/userinfo', {
+            headers: { Authorization: `Bearer ${tokenData.access_token}` }
+        });
+        if (!userResp.ok) {
+            return reply.code(401).send({ error: 'Failed to fetch Google profile' });
+        }
+        const userInfo = await userResp.json() as { email?: string };
+        const email = userInfo.email?.toLowerCase();
+        if (!email) {
+            return reply.code(401).send({ error: 'No email in Google profile' });
+        }
+
+        // Find or auto-create the account (same keypair logic as admin account
+        // creation, but passwordless)
+        let account = await db.account.findUnique({ where: { username: email } });
+        if (!account) {
+            const tweetnacl = (await import("tweetnacl")).default;
+            const keypair = tweetnacl.box.keyPair();
+            try {
+                account = await db.account.create({
+                    data: {
+                        publicKey: privacyKit.encodeHex(new Uint8Array(keypair.publicKey)),
+                        username: email
+                    }
+                });
+            } catch (error: any) {
+                if (error?.code === 'P2002') {
+                    account = await db.account.findUnique({ where: { username: email } });
+                }
+                if (!account) {
+                    throw error;
+                }
+            }
+        }
+
+        const authToken = await auth.createToken(account.id, { google: true });
+        const html = `<!doctype html><html><body><script>` +
+            `localStorage.setItem('cch_token', ${JSON.stringify(authToken)});` +
+            `localStorage.setItem('cch_account_id', ${JSON.stringify(account.id)});` +
+            `location = '/';` +
+            `</script></body></html>`;
+        return reply.type('text/html').send(html);
     });
 
 }

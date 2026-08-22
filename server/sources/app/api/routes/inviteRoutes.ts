@@ -5,6 +5,9 @@ import { db } from "@/storage/db";
 import * as privacyKit from "privacy-kit";
 import { hashPassword, serializePasswordRecord } from "@/app/auth/password";
 import { adminAuth } from "../utils/adminAuth";
+import { issueEmailCode, verifyEmailCode } from "@/app/auth/emailCode";
+import { sendCodeEmail, isDevCodesEnabled } from "@/modules/mailer";
+import { log } from "@/utils/log";
 import type { InviteCode } from "@prisma/client";
 
 function hashInviteToken(token: string): string {
@@ -123,6 +126,24 @@ export function inviteRoutes(app: Fastify) {
         return reply.send({ success: true });
     });
 
+    // Hard-delete an invite (admin-only)
+    app.delete('/v1/admin/invites/:id', {
+        schema: {
+            params: z.object({ id: z.string() })
+        }
+    }, async (request, reply) => {
+        if (!adminAuth(request, reply)) return;
+
+        try {
+            await db.inviteCode.delete({
+                where: { id: request.params.id }
+            });
+        } catch {
+            return reply.code(404).send({ error: 'Invite not found' });
+        }
+        return reply.send({ success: true });
+    });
+
     // Validate an invite token (public, rate-limited)
     app.post('/v1/invites/validate', {
         config: { rateLimit: inviteRateLimit },
@@ -139,9 +160,8 @@ export function inviteRoutes(app: Fastify) {
         return reply.send({ ok: true });
     });
 
-    // Consume an invite: register a new account with email as username
-    // (public, rate-limited). Does not log in — the client should redirect
-    // to the login page afterwards.
+    // Consume an invite, step 1: validate the invite and email a verification
+    // code (public, rate-limited). No account is created here.
     app.post('/v1/invites/consume', {
         config: { rateLimit: inviteRateLimit },
         schema: {
@@ -152,7 +172,7 @@ export function inviteRoutes(app: Fastify) {
             })
         }
     }, async (request, reply) => {
-        const { token, email, password } = request.body;
+        const { token, email } = request.body;
 
         const check = await checkInvite(token);
         if (!check.ok) {
@@ -164,6 +184,41 @@ export function inviteRoutes(app: Fastify) {
         });
         if (existing) {
             return reply.code(409).send({ error: 'email already registered' });
+        }
+
+        const code = await issueEmailCode('register', email);
+        await sendCodeEmail(email, code, 'register');
+        if (isDevCodesEnabled()) {
+            log({ module: 'invite' }, `dev register code for ${email}: ${code}`);
+            return reply.send({ ok: true, pending: true, devCode: code });
+        }
+        return reply.send({ ok: true, pending: true });
+    });
+
+    // Consume an invite, step 2: verify the email code and create the account
+    // (public, rate-limited). Does not log in — the client should redirect to
+    // the login page afterwards.
+    app.post('/v1/invites/verify', {
+        config: { rateLimit: inviteRateLimit },
+        schema: {
+            body: z.object({
+                token: z.string().min(1).max(256),
+                email: z.string().email().max(254),
+                code: z.string().min(6).max(6),
+                password: z.string().min(8).max(128)
+            })
+        }
+    }, async (request, reply) => {
+        const { token, email, code, password } = request.body;
+
+        const check = await checkInvite(token);
+        if (!check.ok) {
+            return reply.send({ ok: false, error: check.error });
+        }
+
+        const codeOk = await verifyEmailCode('register', email, code);
+        if (!codeOk) {
+            return reply.send({ ok: false, error: 'invalid or expired code' });
         }
 
         const tweetnacl = (await import("tweetnacl")).default;
