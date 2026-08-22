@@ -493,15 +493,31 @@ export function sessionRoutes(app: Fastify) {
         },
     }, async (request, reply) => {
         const query = request.query as { after?: string; role?: string; limit?: number } | undefined;
-        const where: { sessionId: string; role?: string; id?: { gt: string } } = {
+        const where: any = {
             sessionId: request.params.sessionId,
         };
         if (query?.role) where.role = query.role;
-        if (query?.after) where.id = { gt: query.after };
+        // Cursor pagination: `after` is a message id, but ids are random cuids
+        // while ordering is by createdAt — resolve the cursor's timestamp first
+        // (with id tiebreak for same-millisecond batches).
+        let orderBy: any = { createdAt: 'asc' as const };
+        if (query?.after) {
+            const cursor = await db.plaintextMessage.findUnique({
+                where: { id: query.after },
+                select: { createdAt: true },
+            });
+            if (cursor) {
+                where.OR = [
+                    { createdAt: { gt: cursor.createdAt } },
+                    { createdAt: cursor.createdAt, id: { gt: query.after } },
+                ];
+                orderBy = [{ createdAt: 'asc' as const }, { id: 'asc' as const }];
+            }
+        }
 
         const messages = await db.plaintextMessage.findMany({
             where,
-            orderBy: { createdAt: 'asc' },
+            orderBy,
             take: query?.limit || 200,
         });
         return reply.send({

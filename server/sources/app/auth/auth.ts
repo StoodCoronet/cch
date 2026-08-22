@@ -1,5 +1,6 @@
 import * as privacyKit from "privacy-kit";
 import { log } from "@/utils/log";
+import { db } from "@/storage/db";
 
 /** Cache entries expire after 24 hours */
 const TOKEN_CACHE_TTL = 24 * 60 * 60 * 1000;
@@ -7,6 +8,8 @@ const TOKEN_CACHE_TTL = 24 * 60 * 60 * 1000;
 const MAX_CACHE_SIZE = 10_000;
 /** Run cleanup every 10 minutes */
 const CLEANUP_INTERVAL = 10 * 60 * 1000;
+/** Account-existence results are cached briefly so hot paths don't hit the DB */
+const ACCOUNT_CACHE_TTL = 60 * 1000;
 
 interface TokenCacheEntry {
     userId: string;
@@ -23,8 +26,25 @@ interface AuthTokens {
 
 class AuthModule {
     private tokenCache = new Map<string, TokenCacheEntry>();
+    private accountCache = new Map<string, { exists: boolean; at: number }>();
     private tokens: AuthTokens | null = null;
     private cleanupTimer: ReturnType<typeof setInterval> | null = null;
+
+    // A token whose account was deleted must stop working — the signature alone
+    // is not enough. Cached 60s to keep hot paths off the DB.
+    private async accountExists(userId: string): Promise<boolean> {
+        const cached = this.accountCache.get(userId);
+        if (cached && Date.now() - cached.at < ACCOUNT_CACHE_TTL) {
+            return cached.exists;
+        }
+        const account = await db.account.findUnique({
+            where: { id: userId },
+            select: { id: true }
+        });
+        const exists = !!account;
+        this.accountCache.set(userId, { exists, at: Date.now() });
+        return exists;
+    }
 
     async init(): Promise<void> {
         if (this.tokens) {
@@ -92,11 +112,16 @@ class AuthModule {
         if (cached) {
             if (Date.now() - cached.cachedAt > TOKEN_CACHE_TTL) {
                 this.tokenCache.delete(token);
-            } else {
+            } else if (await this.accountExists(cached.userId)) {
+                // Cache hit is only valid while the account still exists
+                // (accountCache has a short TTL, so this stays cheap).
                 return {
                     userId: cached.userId,
                     extras: cached.extras
                 };
+            } else {
+                this.tokenCache.delete(token);
+                return null;
             }
         }
         
@@ -113,6 +138,10 @@ class AuthModule {
             
             const userId = verified.user as string;
             const extras = verified.extras;
+
+            if (!(await this.accountExists(userId))) {
+                return null;
+            }
             
             // Evict oldest entries if cache is at capacity
             if (this.tokenCache.size >= MAX_CACHE_SIZE) {
@@ -146,6 +175,7 @@ class AuthModule {
                 this.tokenCache.delete(token);
             }
         }
+        this.accountCache.delete(userId);
         
         log({ module: 'auth' }, `Invalidated tokens for user: ${userId}`);
     }

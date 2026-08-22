@@ -11,6 +11,7 @@ import { startApi, StartApiOptions } from "./app/api/api";
 import { startDatabaseMetricsUpdater } from "./app/monitoring/metrics2";
 import { startTimeout } from "./app/presence/timeout";
 import { startMessageSweeper } from "./app/messages/messageSweeper";
+import { seedDevAccounts } from "./app/devSeed";
 import { onShutdown } from "./utils/shutdown";
 
 export { runMigrations } from "./standalone";
@@ -39,6 +40,7 @@ export async function startServer(opts: StartServerOptions): Promise<{ port: num
     initMailer();
     await loadFiles();
     await auth.init();
+    await seedDevAccounts();
 
     const { port, host } = await startApi({
         port: opts.port,

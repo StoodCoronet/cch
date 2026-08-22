@@ -9,6 +9,7 @@ import {
     revokeBootstrapToken,
 } from "@/app/auth/bootstrapToken";
 import { hashPassword, serializePasswordRecord } from "@/app/auth/password";
+import { auth } from "@/app/auth/auth";
 import { backupNow } from "@/app/backup";
 import { adminAuth } from "../utils/adminAuth";
 
@@ -135,6 +136,10 @@ export function adminRoutes(app: Fastify) {
                 // Finally the account itself.
                 db.account.delete({ where: { id: accountId } }),
             ]);
+
+            // Drop the deleted account's cached tokens immediately — do not
+            // wait for the 60s account-existence cache to expire.
+            auth.invalidateUserTokens(accountId);
 
             await backupNow();
 

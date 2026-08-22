@@ -4,6 +4,7 @@ import { awaitShutdown, onShutdown } from "@/utils/shutdown";
 import { db } from './storage/db';
 import { startTimeout } from "./app/presence/timeout";
 import { startMessageSweeper } from "./app/messages/messageSweeper";
+import { seedDevAccounts } from "./app/devSeed";
 import { startMetricsServer } from "@/app/monitoring/metrics";
 import { activityCache } from "@/app/presence/sessionCache";
 import { auth } from "./app/auth/auth";
@@ -35,6 +36,7 @@ async function main() {
     initMailer();
     await loadFiles();
     await auth.init();
+    await seedDevAccounts();
 
     //
     // Start
