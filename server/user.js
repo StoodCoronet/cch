@@ -1387,7 +1387,7 @@ function renderAddConvs() {
     // Default mode: "new session" card first, then this directory's history
     var newCard = document.createElement("div");
     newCard.className = "cwd-conv-card new-card";
-    newCard.innerHTML = '<div class="conv-title">✚ New session in this directory</div>';
+    newCard.innerHTML = '<div class="conv-title">✚ New session</div>';
     newCard.onclick = function() { if (!addBusy) submitAdd(); };
     box.appendChild(newCard);
     var showCount = addShowAll ? addDirConvs.length : Math.min(5, addDirConvs.length);
