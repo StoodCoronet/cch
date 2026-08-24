@@ -410,9 +410,11 @@ function spawnSession({ profile, cwd, cols, rows, resume, resumeId }) {
     pty.onExit((code) => {
         session.state = 'exited';
         session.exitCode = code;
-        if (session.watcher) session.watcher.stop();
-        removeHookSettings(session.localId);
-        console.log(`session exited: ${session.sessionId || session.localId} code=${code}`);
+        // Do NOT stop the watcher here: claude sometimes replaces its process
+        // (e.g. in-TUI /resume) — the old process exits but the conversation
+        // lives on in a forked jsonl. Keep syncing messages until the session
+        // is explicitly killed.
+        console.log(`session process exited: ${session.sessionId || session.localId} code=${code} (watcher stays active)`);
         emitTermState(session, 'exited', code);
         for (const conn of session.attachSockets) {
             try { conn.write(`\r\n[ccd] session exited (code ${code})\r\n`); } catch (e) { /* ignore */ }

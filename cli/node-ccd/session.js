@@ -72,8 +72,12 @@ function findLatestJsonl(cwd, includeFile) {
     const projDir = path.join(getClaudeProjectsDir(), getProjectDirName(cwd));
     if (!fs.existsSync(projDir)) return null;
     const files = fs.readdirSync(projDir)
-        .filter(f => f.endsWith('.jsonl') && (!includeFile || includeFile(f)))
-        .map(f => ({ name: f, path: path.join(projDir, f), mtime: fs.statSync(path.join(projDir, f)).mtime }))
+        .filter(f => f.endsWith('.jsonl'))
+        .map(f => {
+            const st = fs.statSync(path.join(projDir, f));
+            return { name: f, path: path.join(projDir, f), mtime: st.mtime, birthtimeMs: st.birthtimeMs };
+        })
+        .filter(f => !includeFile || includeFile(f))
         .sort((a, b) => b.mtime - a.mtime);
     return files.length ? files[0].path : null;
 }
@@ -349,6 +353,7 @@ class JsonlWatcher {
         // to older conversations and must not be mistaken for ours. The one exception
         // is resume mode (expectedId): claude appends to that existing file.
         this.expectedId = opts.expectedId || null;
+        this.createdAt = Date.now();
         this.preExisting = new Set();
         try {
             const projDir = path.join(getClaudeProjectsDir(), getProjectDirName(cwd));
@@ -383,11 +388,18 @@ class JsonlWatcher {
 
     pollUnsafe() {
         const jsonlPath = findLatestJsonl(this.cwd, (f) => {
-            if (this.expectedId) return f === `${this.expectedId}.jsonl`;
-            return !this.preExisting.has(f);
+            if (this.expectedId) {
+                // Resume mode: track the resumed file, AND any file created after
+                // this watcher started — claude forks a NEW sessionId when you
+                // /resume inside the TUI, and the fork is where new content goes.
+                if (f.name === `${this.expectedId}.jsonl`) return true;
+                return f.birthtimeMs >= this.createdAt - 2000;
+            }
+            return !this.preExisting.has(f.name);
         });
         if (!jsonlPath) return;
         if (jsonlPath !== this.lastJsonlPath) {
+            const isFirstLock = this.lastJsonlPath === null;
             const isResumeTarget = this.expectedId && path.basename(jsonlPath, '.jsonl') === this.expectedId;
             this.lastJsonlPath = jsonlPath;
             // Scan existing content for title lines (summary / custom-title from
@@ -403,12 +415,15 @@ class JsonlWatcher {
                     } catch (e) { /* ignore */ }
                 }
             } catch (e) { /* ignore */ }
-            // Resume target: history is already on the server under the same tag,
-            // so skip replaying it (avoids duplicate messages). New conversations
-            // (/clear, fresh) replay from the start as before.
-            this.lastOffset = isResumeTarget ? fs.statSync(jsonlPath).size : 0;
+            // History replay policy:
+            //  - resume target (first lock): history is already on the server
+            //  - file switch mid-session (fork on /resume, /clear): the new file
+            //    opens with a copy of the prior conversation — skip to end or we
+            //    double-post the whole history
+            //  - first lock on a fresh conversation: read from the start
+            this.lastOffset = (isResumeTarget || !isFirstLock) ? fs.statSync(jsonlPath).size : 0;
             this.onClaudeSessionId(path.basename(jsonlPath, '.jsonl'));
-            if (isResumeTarget) return;
+            if (isResumeTarget || !isFirstLock) return;
         }
         const stats = fs.statSync(jsonlPath);
         if (stats.size <= this.lastOffset) return;
