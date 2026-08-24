@@ -534,6 +534,10 @@ function connectServer() {
 
     socket.on('connect', () => {
         console.log(`server connected (${server})`);
+        // The machine row may be gone (account reset, server wipe, web-side
+        // machine delete) — registerMachine is create-or-load, so just
+        // re-assert it on every (re)connect.
+        registerMachine().catch(() => {});
         // Re-register all live sessions after (re)connect
         for (const session of sessions.values()) {
             if (session.serverReady) {
