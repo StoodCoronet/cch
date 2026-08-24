@@ -1187,8 +1187,7 @@ function loadTokens() {
             if (conn) {
                 actions +=
                     '<button onclick="copyText(\'' + conn.replace(/'/g, "\\'") + '\')">Copy link</button>' +
-                    '<button onclick="copyText(copyForCch(\'' + conn.replace(/'/g, "\\'") + '\'))">cch</button>' +
-                    '<button onclick="copyText(copyForCcd(\'' + conn.replace(/'/g, "\\'") + '\'))">ccd</button>' +
+                    // cch/ccd (rust CLI) hidden — node-ccd is the only CLI now
                     '<button onclick="copyText(copyForNode(\'' + conn.replace(/'/g, "\\'") + '\'))">node</button>';
             }
             actions += '<button class="revoke" onclick="revokeToken(\'' + t.id.replace(/'/g, "\\'") + '\')">Revoke</button>';
@@ -1786,8 +1785,9 @@ $("logout-btn").onclick = logout;
 $("clear-sessions-btn").onclick = clearAllSessions;
 $("gen-tk-btn").onclick = generateToken;
 $("tk-label").onkeydown = function(e) { if (e.key === "Enter") generateToken(); };
-$("copy-cch-btn").onclick = function() { copyText(copyForCch($("new-conn").textContent)); };
-$("copy-ccd-btn").onclick = function() { copyText(copyForCcd($("new-conn").textContent)); };
+// cch/ccd buttons commented out in the HTML (rust CLI out of scope)
+// $("copy-cch-btn").onclick = function() { copyText(copyForCch($("new-conn").textContent)); };
+// $("copy-ccd-btn").onclick = function() { copyText(copyForCcd($("new-conn").textContent)); };
 $("copy-node-btn").onclick = function() { copyText(copyForNode($("new-conn").textContent)); };
 $("copy-url-btn").onclick = function() { copyText($("new-conn").textContent); };
 
