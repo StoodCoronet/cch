@@ -44,6 +44,75 @@ let server = null;
 let authToken = null;
 let socket = null;
 const hostname = os.hostname();
+let lastSocketReauth = 0;
+
+// --- REST helper with auth self-healing ---
+// The authToken is bootstrapped once at startup and cached. It goes stale
+// when the account is reset server-side or when `connect <new url>` replaced
+// the config while the daemon kept running — every REST call then 401s
+// forever. On 401 we re-read the config (it may carry a new token),
+// re-bootstrap, and retry the request once. A second 401 propagates.
+let isAuthenticated = false;
+
+function isAuthError(e) {
+    return !!(e && e.response && e.response.status === 401);
+}
+
+let reauthPromise = null;
+// Concurrent 401s share one bootstrap round-trip.
+function refreshAuthOnce(reason) {
+    if (!reauthPromise) {
+        reauthPromise = (async () => {
+            console.log(`re-authenticating (${reason})`);
+            try {
+                const config = loadConfig();
+                server = config.server;
+                authToken = await bootstrap(server, config.token, hostname);
+                isAuthenticated = true;
+                console.log('re-authenticated OK');
+                // The account may have been recreated — re-register the machine
+                // row so /v1/machines and the web device picker recover too.
+                registerMachine().catch(() => {});
+                return true;
+            } catch (e) {
+                isAuthenticated = false;
+                if (isAuthError(e)) {
+                    console.error('re-auth failed: bootstrap token rejected (401). The account may have been reset — run: node index.js connect <url>');
+                } else {
+                    console.error(`re-auth failed: ${e.message}`);
+                }
+                return false;
+            }
+        })().finally(() => { reauthPromise = null; });
+    }
+    return reauthPromise;
+}
+
+async function restRequest(method, path, body) {
+    try {
+        const resp = await axios({
+            method,
+            url: `${server}${path}`,
+            data: body,
+            headers: { Authorization: `Bearer ${authToken}` },
+            timeout: 10000,
+        });
+        return resp.data;
+    } catch (e) {
+        if (!isAuthError(e)) throw e;
+        console.warn(`REST ${method} ${path} got 401; attempting re-auth`);
+        if (!(await refreshAuthOnce(`401 on ${method} ${path}`))) throw e;
+        // Retry exactly once with the fresh token; a second 401 propagates
+        const resp = await axios({
+            method,
+            url: `${server}${path}`,
+            data: body,
+            headers: { Authorization: `Bearer ${authToken}` },
+            timeout: 10000,
+        });
+        return resp.data;
+    }
+}
 
 // --- Server session / message sync ---
 async function createServerSession(session) {
@@ -56,14 +125,11 @@ async function createServerSession(session) {
     let lastErr = null;
     for (let attempt = 0; attempt < 3; attempt++) {
         try {
-            const resp = await axios.post(`${server}/v1/sessions`, {
+            const data = await restRequest('post', '/v1/sessions', {
                 tag,
                 metadata: hostname,
-            }, {
-                headers: { Authorization: `Bearer ${authToken}` },
-                timeout: 10000,
             });
-            return resp.data.session.id;
+            return data.session.id;
         } catch (e) {
             lastErr = e;
             console.error(`createServerSession attempt ${attempt + 1} failed: ${e.message}`);
@@ -78,10 +144,7 @@ async function updateServerTag(session) {
     if (!session.serverReady || !session.claudeSessionId) return;
     const tag = `${getProjectDirName(session.cwd)}-${session.claudeSessionId.slice(0, 8)}`;
     try {
-        await axios.patch(`${server}/v1/sessions/${session.sessionId}/tag`, { tag }, {
-            headers: { Authorization: `Bearer ${authToken}` },
-            timeout: 10000,
-        });
+        await restRequest('patch', `/v1/sessions/${session.sessionId}/tag`, { tag });
         console.log(`server tag aligned: ${tag}`);
     } catch (e) {
         console.error(`updateServerTag failed: ${e.message}`);
@@ -94,11 +157,8 @@ async function postMessage(session, role, content, metadata = {}) {
         return;
     }
     try {
-        await axios.post(`${server}/v1/sessions/${session.sessionId}/plaintext-messages`, {
+        await restRequest('post', `/v1/sessions/${session.sessionId}/plaintext-messages`, {
             role, content, metadata,
-        }, {
-            headers: { Authorization: `Bearer ${authToken}` },
-            timeout: 10000,
         });
     } catch (e) {
         console.error(`postMessage error (session ${session.sessionId}): ${e.message}`);
@@ -153,10 +213,8 @@ async function finalizeServerSession(session) {
         console.log(`session ready: ${sessionId} (claude=${session.claudeSessionId || 'unknown'}, profile=${session.profile.name})`);
         // Bump lastActiveAt/updatedAt so resumed sessions surface in the web
         // sidebar even before any new message arrives
-        axios.post(`${server}/v1/sessions/${sessionId}/activity`, {}, {
-            headers: { Authorization: `Bearer ${authToken}` },
-            timeout: 10000,
-        }).catch(e => console.error(`activity ping failed: ${e.message}`));
+        restRequest('post', `/v1/sessions/${sessionId}/activity`, {})
+            .catch(e => console.error(`activity ping failed: ${e.message}`));
         emitTermRegister(session);
         emitTermMeta(session);
         // Flush permission requests that arrived before the server session
@@ -441,12 +499,9 @@ async function registerMachine() {
     let lastErr = null;
     for (let attempt = 0; attempt < 3; attempt++) {
         try {
-            await axios.post(`${server}/v1/machines`, {
+            await restRequest('post', '/v1/machines', {
                 id: hostname,
                 metadata: hostname,
-            }, {
-                headers: { Authorization: `Bearer ${authToken}` },
-                timeout: 10000,
             });
             console.log(`machine registered: ${hostname}`);
             return;
@@ -496,6 +551,19 @@ function connectServer() {
     });
     socket.on('connect_error', (e) => {
         console.error(`server connect_error: ${e.message}`);
+        // Auth failures ('Invalid authentication token' etc.) mean the cached
+        // authToken is stale: re-bootstrap and reconnect with the fresh token.
+        // Throttled so a persistently-rejected token can't spin a reconnect loop.
+        if (!/auth|401|unauthor/i.test(e.message || '')) return;
+        const now = Date.now();
+        if (now - lastSocketReauth < 60000) return;
+        lastSocketReauth = now;
+        refreshAuthOnce(`socket ${e.message}`).then((ok) => {
+            if (!ok || !socket) return;
+            socket.auth = { token: authToken, clientType: 'machine-scoped', machineId: hostname };
+            socket.disconnect();
+            socket.connect();
+        });
     });
 
     socket.on('term:input', (payload) => {
@@ -572,9 +640,11 @@ async function handleRpcMethod(method, params) {
             return { dirs: listDirectories(params.prefix || '') };
         }
         case 'list-sessions': {
+            if (!isAuthenticated) throw new Error('daemon is not authenticated with the server — run: node index.js connect <url>');
             return { sessions: listSessionsPayload() };
         }
         case 'spawn': {
+            if (!isAuthenticated) throw new Error('daemon is not authenticated with the server — run: node index.js connect <url>');
             const { cwd, profileName, resumeId } = params;
             if (!cwd || !profileName) throw new Error('spawn requires cwd and profileName');
             let cwdStat = null;
@@ -783,6 +853,7 @@ async function main() {
     const config = loadConfig();
     server = config.server;
     authToken = await bootstrap(server, config.token, hostname);
+    isAuthenticated = true;
     await registerMachine();
     console.log(`daemon started (pid ${process.pid}, pty backend: ${getPtyBackendName()})`);
 

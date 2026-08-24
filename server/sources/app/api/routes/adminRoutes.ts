@@ -11,6 +11,15 @@ import {
 import { hashPassword, serializePasswordRecord } from "@/app/auth/password";
 import { auth } from "@/app/auth/auth";
 import { backupNow } from "@/app/backup";
+
+// Build the connect URL shown in the UI. 0.0.0.0 / :: are bind addresses, not
+// dialable — fall back to localhost so the copied URL actually works.
+function connectBaseUrl(request: any): string {
+    if (process.env.PUBLIC_URL) return process.env.PUBLIC_URL;
+    let host = request.hostname as string;
+    if (host === '0.0.0.0' || host === '::' || host === '::1') host = 'localhost';
+    return `${request.protocol}://${host}:${process.env.PORT}`;
+}
 import { adminAuth } from "../utils/adminAuth";
 
 export function adminRoutes(app: Fastify) {
@@ -263,7 +272,7 @@ export function adminRoutes(app: Fastify) {
                 id: result.record.id,
                 label: result.record.label,
                 createdAt: result.record.createdAt,
-                connectionUrl: (process.env.PUBLIC_URL || (request.protocol + '://' + request.hostname + ':' + process.env.PORT)) + '/connect?token=' + result.plaintext,
+                connectionUrl: connectBaseUrl(request) + '/connect?token=' + result.plaintext,
             },
         });
     });
@@ -272,7 +281,7 @@ export function adminRoutes(app: Fastify) {
         preHandler: app.authenticate,
     }, async (request, reply) => {
         const tokens = await listBootstrapTokens(request.userId);
-        const baseUrl = process.env.PUBLIC_URL || (request.protocol + '://' + request.hostname + ':' + process.env.PORT);
+        const baseUrl = connectBaseUrl(request);
         return reply.send({
             tokens: tokens.map((t) => ({
                 id: t.id,

@@ -1245,7 +1245,7 @@ function copyForCcd(conn) {
     return "./target/release/ccd connect " + shellQuote(conn);
 }
 function copyForNode(conn) {
-    return "node index.js connect " + shellQuote(conn) + " && node index.js";
+    return "ccd connect " + shellQuote(conn) + " && ccd";
 }
 
 // ===== Session spawn modals (daemon RPC over the ccd:rpc relay) =====
