@@ -119,6 +119,7 @@ async function createServerSession(session) {
     // Fresh spawns get a unique pending tag (two claude processes in the same
     // cwd must not collide on the server, which dedupes sessions by tag).
     // Once claude reveals its sessionId the tag is rewritten via PATCH.
+    session.tagPending = !session.claudeSessionId;
     const tag = session.claudeSessionId
         ? `${getProjectDirName(session.cwd)}-${session.claudeSessionId.slice(0, 8)}`
         : `${getProjectDirName(session.cwd)}-pending-${session.localId.slice(-8)}`;
@@ -139,12 +140,16 @@ async function createServerSession(session) {
     throw lastErr;
 }
 
-// Rewrite the server session tag to include the claudeSessionId (fire-and-forget)
+// Rewrite the server session tag to include the claudeSessionId (fire-and-forget).
+// Only runs while the row carries a pending tag: rows created for a specific
+// conversation (resume) keep that tag even when claude forks — the user resumed
+// THAT conversation and expects the row to continue.
 async function updateServerTag(session) {
-    if (!session.serverReady || !session.claudeSessionId) return;
+    if (!session.serverReady || !session.claudeSessionId || !session.tagPending) return;
     const tag = `${getProjectDirName(session.cwd)}-${session.claudeSessionId.slice(0, 8)}`;
     try {
         await restRequest('patch', `/v1/sessions/${session.sessionId}/tag`, { tag });
+        session.tagPending = false;
         console.log(`server tag aligned: ${tag}`);
     } catch (e) {
         console.error(`updateServerTag failed: ${e.message}`);
@@ -415,6 +420,14 @@ function spawnSession({ profile, cwd, cols, rows, resume, resumeId }) {
         // lives on in a forked jsonl. Keep syncing messages until the session
         // is explicitly killed.
         console.log(`session process exited: ${session.sessionId || session.localId} code=${code} (watcher stays active)`);
+        // If claude never produced a conversation (no jsonl, no messages), the
+        // server row is an empty shell — remove it instead of polluting the
+        // sidebar with a 0-msg pending session.
+        if (!session.claudeSessionId && session.serverReady) {
+            restRequest('delete', `/v1/sessions/${session.sessionId}`)
+                .then(() => console.log(`empty session row deleted: ${session.sessionId}`))
+                .catch(e => console.error(`delete empty session failed: ${e.message}`));
+        }
         emitTermState(session, 'exited', code);
         for (const conn of session.attachSockets) {
             try { conn.write(`\r\n[ccd] session exited (code ${code})\r\n`); } catch (e) { /* ignore */ }
