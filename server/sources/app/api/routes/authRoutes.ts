@@ -460,6 +460,15 @@ export function authRoutes(app: Fastify) {
             return reply.code(401).send({ error: 'No email in Google profile' });
         }
 
+        // Self-host gate: without an invite system in play, Google sign-in would
+        // otherwise be open registration for anyone with a Google account.
+        // GOOGLE_ALLOWED_EMAILS (comma-separated) is the allowlist.
+        const allowed = (process.env.GOOGLE_ALLOWED_EMAILS || '')
+            .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+        if (allowed.length > 0 && !allowed.includes(email)) {
+            return reply.code(403).send({ error: 'This Google account is not allowed on this server' });
+        }
+
         // Find or auto-create the account (same keypair logic as admin account
         // creation, but passwordless)
         let account = await db.account.findUnique({ where: { username: email } });
