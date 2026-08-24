@@ -840,20 +840,7 @@ $("term-close-btn").onclick = function() { closeTerminal(); };
 
 window.addEventListener("resize", scheduleTermFit);
 
-// Login tabs
-document.querySelectorAll(".connect-tab").forEach(function(tab) {
-    tab.onclick = function() {
-        document.querySelectorAll(".connect-tab").forEach(function(t) { t.classList.remove("active"); });
-        document.querySelectorAll(".connect-form").forEach(function(f) { f.classList.remove("active"); });
-        tab.classList.add("active");
-        var target = $(tab.dataset.target);
-        target.classList.add("active");
-        // Clear errors and focus first input
-        document.querySelectorAll(".connect-form .error").forEach(function(e) { e.textContent = ""; });
-        var firstInput = target.querySelector("input");
-        if (firstInput) firstInput.focus();
-    };
-});
+// Login
 
 function finishLogin(d) {
     TOKEN = d.token; ACCOUNT_ID = d.accountId;
@@ -904,7 +891,6 @@ function publicPost(path, body) {
 
 $("forgot-link").onclick = function() {
     $("password-form").classList.remove("active");
-    document.querySelector(".connect-tabs").classList.add("hidden");
     $("reset-form").classList.add("active");
     $("reset-step1").classList.remove("hidden");
     $("reset-step2").classList.add("hidden");
@@ -914,7 +900,6 @@ $("forgot-link").onclick = function() {
 
 $("reset-back").onclick = function() {
     $("reset-form").classList.remove("active");
-    document.querySelector(".connect-tabs").classList.remove("hidden");
     $("password-form").classList.add("active");
 };
 
@@ -990,33 +975,6 @@ $("google-btn").onclick = function() {
 };
 
 // Connect
-function connect() {
-    var input = $("connect-input").value.trim();
-    if (!input) return;
-    var token = input;
-    if (input.indexOf("?token=") !== -1) {
-        token = input.split("?token=")[1];
-        if (input.indexOf("://") !== -1) {
-            var s = input.indexOf("://") + 3, e = input.indexOf("/", s);
-            SERVER = input.substring(0, e);
-            localStorage.setItem("cch_server", SERVER);
-        }
-    }
-    token = token.replace(/[\s\\"']/g, "");
-    var btn = $("connect-btn"), err = $("connect-error");
-    err.textContent = ""; btn.textContent = "Connecting..."; btn.disabled = true;
-
-    fetch(SERVER + "/v1/auth/bootstrap", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token: token, hostname: "web" })
-    }).then(function(r) {
-        if (!r.ok) return r.json().then(function(e) { throw new Error(e.error || "Invalid"); });
-        return r.json();
-    }).then(finishLogin).catch(function(e) {
-        err.textContent = e.message; btn.textContent = "Connect"; btn.disabled = false;
-    });
-}
-
 function showDashboard() {
     $("connect-screen").style.display = "none";
     loadSessions(); loadMachines(); loadTokens();
@@ -1738,8 +1696,6 @@ $("add-search").addEventListener("keydown", function(e) {
 });
 
 // Events
-$("connect-btn").onclick = connect;
-$("connect-input").onkeydown = function(e) { if (e.key === "Enter") connect(); };
 $("login-btn").onclick = loginWithPassword;
 $("login-password").onkeydown = function(e) { if (e.key === "Enter") loginWithPassword(); };
 $("refresh-btn").onclick = refresh;
@@ -1752,6 +1708,4 @@ $("copy-ccd-btn").onclick = function() { copyText(copyForCcd($("new-conn").textC
 $("copy-node-btn").onclick = function() { copyText(copyForNode($("new-conn").textContent)); };
 $("copy-url-btn").onclick = function() { copyText($("new-conn").textContent); };
 
-var ut = new URLSearchParams(window.location.search).get("token");
-if (ut) $("connect-input").value = window.location.href;
 if (TOKEN) showDashboard();
