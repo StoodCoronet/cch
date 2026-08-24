@@ -63,7 +63,7 @@
 html,body{height:100%}
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;background:var(--bg);color:var(--fg);line-height:1.55;font-size:14.5px}
 button,input,textarea,select{font-family:inherit;font-size:inherit}
-#app{display:flex;height:100vh;width:100vw;overflow:hidden;--sidebar-width:280px}
+#app{display:flex;height:100vh;height:100dvh;width:100vw;overflow:hidden;--sidebar-width:280px}
 
 /* Sidebar */
 .sidebar{width:var(--sidebar-width);flex-shrink:0;background:var(--bg-elevated);border-right:1px solid var(--border);display:flex;flex-direction:column;transition:transform .25s ease, opacity .2s ease;position:relative}
@@ -223,7 +223,7 @@ button,input,textarea,select{font-family:inherit;font-size:inherit}
 .tokens-line{color:var(--chat-fg-secondary);font-size:12px;margin:2px 0 0 24px;font-family:"SF Mono","Fira Code",monospace}
 
 /* Input area */
-.input-area{padding:12px 20px 16px;border-top:1px solid var(--chat-border);background:var(--chat-bg);flex-shrink:0}
+.input-area{padding:12px 20px calc(16px + env(safe-area-inset-bottom, 0px));border-top:1px solid var(--chat-border);background:var(--chat-bg);flex-shrink:0}
 .input-wrapper{max-width:900px;margin:0 auto;background:var(--chat-input-bg);border:1px solid var(--chat-border);border-radius:6px;padding:4px;display:flex;align-items:flex-end;gap:8px;transition:border .15s}
 .input-wrapper:focus-within{border-color:var(--chat-focus)}
 #msg-input{flex:1;background:transparent;border:none;outline:none;color:var(--chat-fg);font-size:13px;line-height:1.5;padding:10px 8px 10px 12px;max-height:180px;min-height:20px;resize:none;font-family:"SF Mono","Fira Code",monospace}
@@ -269,7 +269,7 @@ button,input,textarea,select{font-family:inherit;font-size:inherit}
 /* Device connect modal */
 .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);backdrop-filter:blur(4px);z-index:90;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity .2s}
 .modal-overlay.open{opacity:1;pointer-events:auto}
-.modal{width:560px;max-width:calc(100% - 32px);max-height:calc(100vh - 40px);background:var(--bg-elevated);border:1px solid var(--border);border-radius:18px;box-shadow:var(--shadow);display:flex;flex-direction:column;overflow:hidden;transform:translateY(10px);transition:transform .2s}
+.modal{width:560px;max-width:calc(100% - 32px);max-height:calc(100dvh - 40px);background:var(--bg-elevated);border:1px solid var(--border);border-radius:18px;box-shadow:var(--shadow);display:flex;flex-direction:column;overflow:hidden;transform:translateY(10px);transition:transform .2s}
 .modal-overlay.open .modal{transform:translateY(0)}
 .modal-header{padding:18px 22px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px}
 .modal-header h2{font-size:17px;font-weight:600;flex:1}
@@ -361,7 +361,7 @@ select.modal-input{margin-bottom:0}
   .input-area{padding:12px 14px 16px}
   .input-wrapper{max-width:100%}
   .connect-card{width:calc(100% - 32px);padding:24px}
-  .modal{width:100%;max-height:100vh;border-radius:0}
+  .modal{width:100%;max-height:100vh;max-height:100dvh;border-radius:0}
   /* iOS Safari auto-zooms the page when a focused input is < 16px — keep form
      controls at 16px on mobile so focusing never zooms/overflows the page */
   input,textarea,select{font-size:16px}
