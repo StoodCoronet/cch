@@ -63,6 +63,10 @@ button,input{font-family:inherit;font-size:inherit}
 .big-message a{color:var(--accent-light);text-decoration:none;font-weight:600}
 .big-message a:hover{text-decoration:underline}
 .hidden{display:none!important}
+@media (max-width: 768px) {
+  /* prevent iOS Safari auto-zoom on input focus (inputs < 16px trigger it) */
+  input,textarea,select{font-size:16px}
+}
 </style>
 </head>
 <body>

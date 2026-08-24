@@ -367,6 +367,9 @@ select.modal-input{margin-bottom:0}
   .input-wrapper{max-width:100%}
   .connect-card{width:calc(100% - 32px);padding:24px}
   .modal{width:100%;max-height:100vh;border-radius:0}
+  /* iOS Safari auto-zooms the page when a focused input is < 16px — keep form
+     controls at 16px on mobile so focusing never zooms/overflows the page */
+  input,textarea,select{font-size:16px}
 }
 </style>
 </head>

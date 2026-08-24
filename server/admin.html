@@ -125,6 +125,10 @@ tr:last-child td{border-bottom:none}
   table{font-size:13px}
   th,td{padding:10px 6px}
 }
+@media (max-width: 768px) {
+  /* prevent iOS Safari auto-zoom on input focus (inputs < 16px trigger it) */
+  input,textarea,select{font-size:16px}
+}
 </style>
 </head>
 <body>
