@@ -375,8 +375,8 @@ select.modal-input{margin-bottom:0}
       <div class="logo-wrap"><div class="logo-mark"></div><h1>CCH</h1></div>
       <p>Connect to your self-hosted server</p>
       <div class="connect-form active" id="password-form">
-        <input id="login-username" type="text" placeholder="Username" autofocus>
-        <input id="login-password" type="password" placeholder="Password">
+        <input id="login-username" type="text" placeholder="Username" autofocus autocomplete="username">
+        <input id="login-password" type="password" placeholder="Password" autocomplete="current-password">
         <button id="login-btn">Sign In</button>
         <p class="error" id="login-error"></p>
         <div class="login-links"><a id="forgot-link">Forgot password?</a></div>
@@ -390,7 +390,7 @@ select.modal-input{margin-bottom:0}
         <div id="reset-step2" class="hidden">
           <p class="reset-info" id="reset-info"></p>
           <input id="reset-code" type="text" placeholder="6-digit code" autocomplete="one-time-code" maxlength="6">
-          <input id="reset-password" type="password" placeholder="New password (min 8 chars)">
+          <input id="reset-password" type="password" placeholder="New password (min 8 chars)" autocomplete="new-password">
           <button id="reset-submit-btn">Reset password</button>
           <p class="dev-code hidden" id="reset-dev-code"></p>
         </div>
