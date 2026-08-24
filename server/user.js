@@ -376,11 +376,13 @@ function setTermState(state, exitCode) {
 }
 
 function updateInputState() {
-    var running = termState === "running";
+    if (resumeSendBusy) return; // the resume flow owns the controls
     var input = $("msg-input");
-    input.disabled = !running;
-    input.placeholder = running ? "Send a message..." : "session not running";
-    $("send-btn").disabled = !running || !input.value.trim();
+    input.disabled = false;
+    input.placeholder = termState === "running"
+        ? "Send a message..."
+        : "session not running — sending a message will resume it";
+    $("send-btn").disabled = !input.value.trim();
 }
 
 function updateTermHeader() {
@@ -637,22 +639,123 @@ function renderToolResult(tr) {
 
 // Send user input into the claude PTY via the daemon relay. No optimistic
 // render and no REST POST: the message reappears once the jsonl watcher
-// pushes it back as a plaintext-message update.
+// pushes it back as a plaintext-message update. When the session is not
+// running, sending first resumes it (spawn with resumeId) and then delivers.
 function sendMessage() {
     var input = $("msg-input");
     var text = input.value.trim();
-    if (!text || !currentSessionId || termState !== "running" || !socket) return;
-    socket.emit("term:input", { sessionId: currentSessionId, data: text + "\r" });
-    input.value = "";
-    input.style.height = "auto";
-    $("send-btn").disabled = true;
+    if (!text || !currentSessionId || !socket || resumeSendBusy) return;
+    if (termState === "running") {
+        socket.emit("term:input", { sessionId: currentSessionId, data: text + "\r" });
+        input.value = "";
+        input.style.height = "auto";
+        $("send-btn").disabled = true;
+        setInputError("");
+        return;
+    }
+    resumeAndSend(text);
+}
+
+// Input-area error line (reuses the hint row under the textarea).
+function setInputError(msg) {
+    var el = $("input-hint");
+    if (msg) {
+        el.style.color = "var(--red)";
+        el.textContent = msg;
+    } else {
+        el.style.color = "";
+        el.textContent = "Press Enter to send, Shift+Enter for new line";
+    }
+}
+
+var resumeSendBusy = false;
+
+function setInputBusy(busy) {
+    $("msg-input").disabled = busy;
+    $("send-btn").disabled = busy;
+    if (busy) $("msg-input").placeholder = "resuming session...";
+}
+
+// Wait until the session's terminal reports running. Two paths, both covered:
+// (1) listen for terminal-state events (ephemeral fan-out + direct room event)
+// (2) poll term:query-state once a second — catches the state even if the
+//     event was missed. Gives up after 10s.
+function waitForRunning(sessionId) {
+    return new Promise(function(resolve, reject) {
+        var done = false;
+        var timeout = null;
+        var poll = null;
+        function finish(ok, err) {
+            if (done) return;
+            done = true;
+            clearTimeout(timeout);
+            clearInterval(poll);
+            socket.off("ephemeral", onEphemeral);
+            socket.off("term:state", onState);
+            if (ok) resolve(); else reject(err);
+        }
+        function onEphemeral(p) {
+            if (p && p.type === "terminal-state" && p.sessionId === sessionId && p.state === "running") finish(true);
+        }
+        function onState(m) {
+            if (m && m.sessionId === sessionId && m.state === "running") finish(true);
+        }
+        socket.on("ephemeral", onEphemeral);
+        socket.on("term:state", onState);
+        poll = setInterval(function() {
+            socket.emit("term:query-state", { sessionId: sessionId }, function(ack) {
+                if (ack && ack.ok && ack.state === "running") finish(true);
+            });
+        }, 1000);
+        timeout = setTimeout(function() { finish(false, new Error("resume timed out")); }, 10000);
+    });
+}
+
+function resumeAndSend(text) {
+    var meta = sessionMeta[currentSessionId] || {};
+    var claudeSessionId = meta.claudeSessionId;
+    var cwd = meta.cwd;
+    if (!claudeSessionId || !cwd) {
+        setInputError("cannot resume: no claude session id");
+        return;
+    }
+    resumeSendBusy = true;
+    setInputBusy(true);
+    setInputError("");
+    var machineId = meta.deviceName || undefined;
+    kvGet("profile:conv:" + claudeSessionId).then(function(v) {
+        if (v) return v;
+        return kvGet("profile:last").then(function(v2) { return v2 || "default"; });
+    }).then(function(profileName) {
+        return ccdRpc("spawn", { cwd: cwd, profileName: profileName, resumeId: claudeSessionId }, machineId);
+    }).then(function(res) {
+        // Tag dedup on the server usually returns the same sessionId
+        var sid = (res && res.sessionId) || currentSessionId;
+        return waitForRunning(sid).then(function() { return sid; });
+    }).then(function(sid) {
+        socket.emit("term:input", { sessionId: sid, data: text + "\r" });
+        var input = $("msg-input");
+        input.value = "";
+        input.style.height = "auto";
+        resumeSendBusy = false;
+        setInputBusy(false);
+        updateInputState();
+        if (sid !== currentSessionId) loadSessions(); // server may have re-keyed the session
+    }).catch(function(e) {
+        // Keep the typed text intact on failure
+        resumeSendBusy = false;
+        setInputBusy(false);
+        updateInputState();
+        setInputError(spawnErrorText(e));
+    });
 }
 
 // Textarea auto-resize
 $("msg-input").addEventListener("input", function() {
     this.style.height = "auto";
     this.style.height = Math.min(180, this.scrollHeight) + "px";
-    $("send-btn").disabled = termState !== "running" || !this.value.trim();
+    $("send-btn").disabled = !this.value.trim();
+    setInputError("");
 });
 $("msg-input").addEventListener("keydown", function(e) {
     if (e.key === "Enter" && !e.shiftKey) {
