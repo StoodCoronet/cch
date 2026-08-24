@@ -243,8 +243,8 @@ button,input,textarea,select{font-family:inherit;font-size:inherit}
 .term-overlay-body{flex:1;min-height:0;padding:6px 4px 4px 8px;background:#0d0d0d;display:flex}
 .term-overlay-body .xterm{height:100%}
 
-/* Connect screen */
-#connect-screen{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:var(--bg);z-index:100}
+/* Connect screen + forced password change screen */
+#connect-screen, #change-screen{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:var(--bg);z-index:100}
 .connect-card{width:min(420px, calc(100% - 32px));background:var(--bg-elevated);border:1px solid var(--border);border-radius:18px;padding:32px;box-shadow:var(--shadow)}
 .connect-card .logo-wrap{display:flex;align-items:center;justify-content:center;gap:12px;margin-bottom:8px}
 .connect-card .logo-wrap .logo-mark{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--accent),var(--accent-light))}
@@ -375,7 +375,7 @@ select.modal-input{margin-bottom:0}
       <div class="logo-wrap"><div class="logo-mark"></div><h1>CCH</h1></div>
       <p>Connect to your self-hosted server</p>
       <div class="connect-form active" id="password-form">
-        <input id="login-username" type="text" placeholder="Email" autofocus>
+        <input id="login-username" type="text" placeholder="Username" autofocus>
         <input id="login-password" type="password" placeholder="Password">
         <button id="login-btn">Sign In</button>
         <p class="error" id="login-error"></p>
@@ -400,6 +400,20 @@ select.modal-input{margin-bottom:0}
     </div>
   </div>
 
+  <div id="change-screen" style="display:none">
+    <div class="connect-card">
+      <div class="logo-wrap"><div class="logo-mark"></div><h1>CCH</h1></div>
+      <p>You must change your password before continuing</p>
+      <div class="connect-form active">
+        <input id="cp-current" type="password" placeholder="Current password" autocomplete="current-password">
+        <input id="cp-new" type="password" placeholder="New password (min 8 chars)" autocomplete="new-password">
+        <input id="cp-confirm" type="password" placeholder="Confirm new password" autocomplete="new-password">
+        <button id="cp-btn">Change password</button>
+        <p class="error" id="cp-error"></p>
+      </div>
+    </div>
+  </div>
+
   <aside class="sidebar" id="sidebar">
     <div class="resizer" id="resizer"></div>
     <div class="sidebar-header">
@@ -408,6 +422,7 @@ select.modal-input{margin-bottom:0}
       <button class="connect-device-btn" id="open-connect-modal"><span class="plus">+</span><span>Device</span></button>
       <button class="icon-btn" id="theme-btn" title="Toggle theme">🌙</button>
       <button class="icon-btn" id="refresh-btn" title="Refresh">↻</button>
+      <button class="icon-btn" id="open-settings" title="Account settings">⚙</button>
       <button class="icon-btn" id="logout-btn" title="Logout">→</button>
     </div>
     <div class="sidebar-search">
@@ -522,6 +537,23 @@ select.modal-input{margin-bottom:0}
       </div>
       <button id="add-submit" class="modal-btn" disabled>Start</button>
       <p class="error" id="add-error" style="text-align:center;margin-top:10px"></p>
+    </div>
+  </div>
+</div>
+
+<!-- Change Password Modal -->
+<div class="modal-overlay" id="settings-modal">
+  <div class="modal" style="max-width:400px">
+    <div class="modal-header">
+      <h2>Change Password</h2>
+      <button class="modal-close" id="close-settings">×</button>
+    </div>
+    <div class="modal-body">
+      <input id="sp-current" class="modal-input" type="password" placeholder="Current password" autocomplete="current-password">
+      <input id="sp-new" class="modal-input" type="password" placeholder="New password (min 8 chars)" autocomplete="new-password">
+      <input id="sp-confirm" class="modal-input" type="password" placeholder="Confirm new password" autocomplete="new-password">
+      <button id="sp-btn" class="modal-btn">Change password</button>
+      <p class="error" id="sp-msg" style="text-align:center;margin-top:10px"></p>
     </div>
   </div>
 </div>

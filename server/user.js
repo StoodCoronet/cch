@@ -116,6 +116,7 @@ document.addEventListener("keydown", function(e) {
     if (e.key !== "Escape") return;
     if ($("connect-modal").classList.contains("open")) closeModal();
     if ($("add-modal").classList.contains("open")) closeAddModal();
+    if ($("settings-modal").classList.contains("open")) closeSettings();
 });
 
 // Search
@@ -846,6 +847,13 @@ function finishLogin(d) {
     TOKEN = d.token; ACCOUNT_ID = d.accountId;
     localStorage.setItem("cch_token", TOKEN);
     localStorage.setItem("cch_account_id", ACCOUNT_ID);
+    if (d.mustChangePassword) {
+        // Forced first-login password change — no skip, no dashboard access
+        $("connect-screen").style.display = "none";
+        $("change-screen").style.display = "flex";
+        $("cp-current").focus();
+        return;
+    }
     showDashboard();
 }
 
@@ -973,6 +981,81 @@ $("reset-code").onkeydown = function(e) { if (e.key === "Enter") submitReset(); 
 $("google-btn").onclick = function() {
     window.location.href = SERVER + "/v1/auth/google";
 };
+
+// ===== Change password (forced first-login screen + settings modal) =====
+
+// Authed POST that treats 401 as a normal error ("invalid current password")
+// instead of logging out like api() does.
+function doChangePassword(curId, newId, confirmId, errId, btn, onSuccess) {
+    var oldPw = $(curId).value;
+    var newPw = $(newId).value;
+    var confirm = $(confirmId).value;
+    var err = $(errId);
+    err.style.color = "";
+    if (newPw.length < 8) { err.textContent = "New password must be at least 8 characters"; return; }
+    if (newPw !== confirm) { err.textContent = "Passwords do not match"; return; }
+    err.textContent = "";
+    btn.disabled = true;
+    btn.textContent = "Changing...";
+    fetch(SERVER + "/v1/auth/change-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + TOKEN },
+        body: JSON.stringify({ oldPassword: oldPw, newPassword: newPw })
+    }).then(function(r) {
+        if (r.status === 429) throw new Error("Too many requests — please try again later");
+        return r.json().catch(function() { throw new Error(r.statusText || "Request failed"); }).then(function(d) {
+            if (!r.ok) throw new Error(d.error || (r.status === 401 ? "invalid current password" : r.statusText));
+            return d;
+        });
+    }).then(function() {
+        btn.disabled = false;
+        btn.textContent = "Change password";
+        onSuccess();
+    }).catch(function(e) {
+        err.textContent = e.message;
+        btn.disabled = false;
+        btn.textContent = "Change password";
+    });
+}
+
+function openSettings() {
+    ["sp-current", "sp-new", "sp-confirm"].forEach(function(id) { $(id).value = ""; });
+    var msg = $("sp-msg");
+    msg.style.color = "";
+    msg.textContent = "";
+    $("settings-modal").classList.add("open");
+    $("sp-current").focus();
+}
+function closeSettings() {
+    $("settings-modal").classList.remove("open");
+}
+
+$("open-settings").onclick = openSettings;
+$("close-settings").onclick = closeSettings;
+$("settings-modal").onclick = function(e) {
+    if (e.target === $("settings-modal")) closeSettings();
+};
+$("sp-btn").onclick = function() {
+    doChangePassword("sp-current", "sp-new", "sp-confirm", "sp-msg", this, function() {
+        ["sp-current", "sp-new", "sp-confirm"].forEach(function(id) { $(id).value = ""; });
+        var msg = $("sp-msg");
+        msg.style.color = "var(--green)";
+        msg.textContent = "Password changed";
+    });
+};
+["sp-current", "sp-new", "sp-confirm"].forEach(function(id) {
+    $(id).onkeydown = function(e) { if (e.key === "Enter") $("sp-btn").click(); };
+});
+
+$("cp-btn").onclick = function() {
+    doChangePassword("cp-current", "cp-new", "cp-confirm", "cp-error", this, function() {
+        $("change-screen").style.display = "none";
+        showDashboard();
+    });
+};
+["cp-current", "cp-new", "cp-confirm"].forEach(function(id) {
+    $(id).onkeydown = function(e) { if (e.key === "Enter") $("cp-btn").click(); };
+});
 
 // Connect
 function showDashboard() {

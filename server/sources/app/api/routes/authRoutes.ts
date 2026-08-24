@@ -325,7 +325,53 @@ export function authRoutes(app: Fastify) {
         }
 
         const authToken = await auth.createToken(account.id, { password: true });
-        return reply.send({ token: authToken, accountId: account.id });
+        const mustChange = await db.userKVStore.findUnique({
+            where: { accountId_key: { accountId: account.id, key: 'must-change-password' } }
+        });
+        return reply.send({ token: authToken, accountId: account.id, mustChangePassword: mustChange !== null });
+    });
+
+    // Self-service password change (authenticated). Also clears the
+    // must-change-password flag set when the admin provisions an account.
+    app.post('/v1/auth/change-password', {
+        config: { rateLimit: authRateLimit },
+        preHandler: app.authenticate,
+        schema: {
+            body: z.object({
+                oldPassword: z.string().min(1),
+                newPassword: z.string().min(8).max(128),
+            }),
+        },
+    }, async (request, reply) => {
+        const { oldPassword, newPassword } = request.body;
+
+        const account = await db.account.findUnique({
+            where: { id: request.userId },
+        });
+        if (!account || !account.passwordHash) {
+            return reply.code(401).send({ error: 'invalid current password' });
+        }
+
+        let parsed: PasswordRecord;
+        try {
+            parsed = deserializePasswordRecord(account.passwordHash);
+        } catch {
+            return reply.code(500).send({ error: 'Failed to read password record' });
+        }
+
+        const valid = await verifyPassword(oldPassword, parsed);
+        if (!valid) {
+            return reply.code(401).send({ error: 'invalid current password' });
+        }
+
+        await db.account.update({
+            where: { id: account.id },
+            data: { passwordHash: serializePasswordRecord(await hashPassword(newPassword)) },
+        });
+        await db.userKVStore.deleteMany({
+            where: { accountId: account.id, key: 'must-change-password' }
+        });
+        return reply.send({ ok: true });
     });
 
     // Request a password reset code (public, rate-limited). Always returns
