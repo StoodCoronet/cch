@@ -367,6 +367,9 @@ class JsonlWatcher {
         this.lastOffset = 0;
         this.timer = null;
         this.firstUserText = null;
+        // Custom titles (/rename custom-title, summary) outrank the
+        // first-message fallback; once one is seen, the fallback never fires.
+        this.titleFromCustom = false;
     }
 
     start() {
@@ -416,8 +419,8 @@ class JsonlWatcher {
                     if (!line.includes('custom-title') && !line.includes('"summary"')) continue;
                     try {
                         const m = JSON.parse(line);
-                        if (m.type === 'custom-title' && m.customTitle) this.onTitle(m.customTitle);
-                        else if (m.type === 'summary' && m.summary) this.onTitle(m.summary);
+                        if (m.type === 'custom-title' && m.customTitle) { this.titleFromCustom = true; this.onTitle(m.customTitle); }
+                        else if (m.type === 'summary' && m.summary) { this.titleFromCustom = true; this.onTitle(m.summary); }
                     } catch (e) { /* ignore */ }
                 }
             } catch (e) { /* ignore */ }
@@ -451,11 +454,13 @@ class JsonlWatcher {
                 continue;
             }
             if (msg.type === 'summary' && msg.summary) {
+                this.titleFromCustom = true;
                 this.onTitle(msg.summary);
                 continue;
             }
             // claude /rename writes {"type":"custom-title","customTitle":"..."}
             if (msg.type === 'custom-title' && msg.customTitle) {
+                this.titleFromCustom = true;
                 this.onTitle(msg.customTitle);
                 continue;
             }
@@ -501,7 +506,7 @@ class JsonlWatcher {
             }
             if (!parts.text.trim() && !parts.thinking.trim() && !parts.toolCalls.length && !parts.toolResults.length) continue;
 
-            if (role === 'user' && parts.text.trim() && !this.firstUserText) {
+            if (role === 'user' && parts.text.trim() && !this.firstUserText && !this.titleFromCustom) {
                 this.firstUserText = parts.text;
                 this.onTitle(truncateForDisplay(parts.text.replace(/\s+/g, ' ').trim(), 60));
             }
