@@ -29,3 +29,4 @@ android/local.properties
 android/.idea/
 android/keystore.properties
 android/*.keystore
+server/.logs/
