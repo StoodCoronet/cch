@@ -5,7 +5,10 @@ import { log } from "@/utils/log";
 import { readFileSync } from "node:fs";
 
 // Single source of truth for the server version (bump on release)
-const SERVER_VERSION = JSON.parse(readFileSync(process.cwd() + "/package.json", "utf-8")).version;
+let SERVER_VERSION = "dev";
+try {
+    SERVER_VERSION = JSON.parse(readFileSync(process.cwd() + "/package.json", "utf-8")).version;
+} catch { /* bundled/container deployments may not ship package.json at cwd */ }
 
 export function enableMonitoring(app: Fastify) {
     // Add metrics hooks

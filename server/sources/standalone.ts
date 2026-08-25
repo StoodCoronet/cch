@@ -95,6 +95,17 @@ export async function runMigrations(opts: { pgliteDir: string; migrationsDir?: s
             );
             appliedCount++;
         } catch (e: any) {
+            // Databases that predate the migration files may already carry the
+            // tables (e.g. created by init.ts raw SQL). Treat "already exists"
+            // as applied instead of crash-looping the deployment.
+            if (typeof e?.message === 'string' && e.message.includes('already exists')) {
+                console.warn(`  Skipping ${dir}: objects already exist, marking as applied`);
+                await pg.query(
+                    `INSERT INTO "_prisma_migrations" ("id", "migration_name", "finished_at", "applied_steps_count") VALUES ($1, $2, now(), 0)`,
+                    [crypto.randomUUID(), dir]
+                ).catch(() => {});
+                continue;
+            }
             throw new Error(`Failed to apply ${dir}: ${e.message}`);
         }
     }
