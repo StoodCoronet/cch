@@ -152,6 +152,27 @@ async function updateServerTag(session) {
         session.tagPending = false;
         console.log(`server tag aligned: ${tag}`);
     } catch (e) {
+        // The conversation already has a server row (e.g. user /resumed an old
+        // conversation inside a fresh TUI): adopt that row instead of leaving a
+        // parallel pending shell — delete ours, re-key to the existing row so
+        // messages continue the original conversation's thread.
+        if (e.response && e.response.status === 409 && e.response.data && e.response.data.sessionId) {
+            const adoptedId = e.response.data.sessionId;
+            console.log(`tag conflict: adopting existing session row ${adoptedId} for claude=${session.claudeSessionId.slice(0, 8)}`);
+            const oldId = session.sessionId;
+            restRequest('delete', `/v1/sessions/${oldId}`).catch(() => {});
+            if (sessions.get(oldId) === session) sessions.delete(oldId);
+            session.sessionId = adoptedId;
+            session.tagPending = false;
+            sessions.set(adoptedId, session);
+            emitTermRegister(session);
+            emitTermMeta(session);
+            const pending = session.pendingMessages.splice(0);
+            for (const m of pending) {
+                postMessage(session, m.role, m.content, m.metadata).catch(() => {});
+            }
+            return;
+        }
         console.error(`updateServerTag failed: ${e.message}`);
     }
 }

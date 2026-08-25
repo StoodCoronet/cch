@@ -75,10 +75,10 @@ function findLatestJsonl(cwd, includeFile) {
         .filter(f => f.endsWith('.jsonl'))
         .map(f => {
             const st = fs.statSync(path.join(projDir, f));
-            return { name: f, path: path.join(projDir, f), mtime: st.mtime, birthtimeMs: st.birthtimeMs };
+            return { name: f, path: path.join(projDir, f), mtimeMs: st.mtimeMs, birthtimeMs: st.birthtimeMs };
         })
         .filter(f => !includeFile || includeFile(f))
-        .sort((a, b) => b.mtime - a.mtime);
+        .sort((a, b) => b.mtimeMs - a.mtimeMs);
     return files.length ? files[0].path : null;
 }
 
@@ -395,12 +395,18 @@ class JsonlWatcher {
                 if (f.name === `${this.expectedId}.jsonl`) return true;
                 return f.birthtimeMs >= this.createdAt - 2000;
             }
-            return !this.preExisting.has(f.name);
+            // Fresh spawn: ignore files that existed at spawn time (stale-id
+            // protection) — UNLESS they were modified after spawn, which means
+            // the user /resumed (or /continued) an old conversation inside
+            // this session's TUI and claude is appending to it now.
+            if (!this.preExisting.has(f.name)) return true;
+            return f.mtimeMs >= this.createdAt - 2000;
         });
         if (!jsonlPath) return;
         if (jsonlPath !== this.lastJsonlPath) {
             const isFirstLock = this.lastJsonlPath === null;
             const isResumeTarget = this.expectedId && path.basename(jsonlPath, '.jsonl') === this.expectedId;
+            const isPreExisting = this.preExisting.has(path.basename(jsonlPath));
             this.lastJsonlPath = jsonlPath;
             // Scan existing content for title lines (summary / custom-title from
             // /rename) so resumed conversations get their name back.
@@ -415,15 +421,16 @@ class JsonlWatcher {
                     } catch (e) { /* ignore */ }
                 }
             } catch (e) { /* ignore */ }
-            // History replay policy:
-            //  - resume target (first lock): history is already on the server
+            // History replay policy — only a brand-new file on the first lock is
+            // read from the start. Everything else skips to the end:
+            //  - resume target (expectedId): history is already on the server
             //  - file switch mid-session (fork on /resume, /clear): the new file
-            //    opens with a copy of the prior conversation — skip to end or we
-            //    double-post the whole history
-            //  - first lock on a fresh conversation: read from the start
-            this.lastOffset = (isResumeTarget || !isFirstLock) ? fs.statSync(jsonlPath).size : 0;
+            //    opens with a copy of the prior conversation — no double-posting
+            //  - pre-existing file (in-TUI /resume of an old conversation): its
+            //    history is already on the server under that conversation's row
+            this.lastOffset = (isResumeTarget || !isFirstLock || isPreExisting) ? fs.statSync(jsonlPath).size : 0;
             this.onClaudeSessionId(path.basename(jsonlPath, '.jsonl'));
-            if (isResumeTarget || !isFirstLock) return;
+            if (isResumeTarget || !isFirstLock || isPreExisting) return;
         }
         const stats = fs.statSync(jsonlPath);
         if (stats.size <= this.lastOffset) return;
