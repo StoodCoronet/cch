@@ -332,23 +332,27 @@ select.modal-input{margin-bottom:0}
 
 .hidden{display:none}
 
-/* Permission approval cards (floating, bottom-right of the main area) */
-#perm-cards{position:fixed;right:20px;bottom:20px;z-index:60;display:flex;flex-direction:column;gap:10px;width:360px;max-width:calc(100vw - 40px)}
-#perm-cards:empty{display:none}
-.perm-card{background:var(--bg-elevated);border:1px solid var(--border-strong);border-radius:12px;padding:14px 16px;box-shadow:var(--shadow)}
-.perm-card.sending{opacity:.6}
-.perm-title{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--fg-tertiary);margin-bottom:6px}
-.perm-tool{font-size:13px;font-weight:600;font-family:"SF Mono","Fira Code",monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.perm-tool .perm-arg{font-weight:400;color:var(--fg-secondary)}
-.perm-session{font-size:11px;color:var(--fg-tertiary);margin-top:4px;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.perm-session:hover{color:var(--accent-light);text-decoration:underline}
-.perm-actions{display:flex;gap:8px;margin-top:12px}
+/* Permission approval cards (inline in the transcript) */
+.perm-inline{margin:6px 0 6px 24px;border:1px solid var(--chat-border);border-left:3px solid var(--accent);border-radius:8px;background:var(--chat-bg);padding:10px 12px;max-width:640px;font-family:"SF Mono","Fira Code",monospace}
+.perm-inline.sending{opacity:.6}
+.perm-inline-head{cursor:pointer;user-select:none}
+.perm-inline-title{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--chat-fg-secondary)}
+.perm-inline-tool{font-size:13px;font-weight:600;color:var(--chat-fg);margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.perm-inline-tool .perm-arg{font-weight:400;color:var(--chat-fg-secondary)}
+.perm-inline-session{font-size:11px;color:var(--chat-fg-secondary);margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.perm-inline-args{display:none;margin:8px 0 0;padding:8px 10px;background:var(--chat-code-bg);border-radius:6px;font-size:12px;line-height:1.5;white-space:pre;word-break:normal;overflow-x:auto;color:var(--chat-fg)}
+.perm-inline.open .perm-inline-args{display:block}
+.perm-actions{display:flex;gap:8px;margin-top:10px}
 .perm-actions button{flex:1;padding:7px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;transition:all .15s}
 .perm-actions button:disabled{cursor:not-allowed;opacity:.6}
 .perm-allow{border:none;background:var(--accent);color:#fff}
 .perm-allow:hover:not(:disabled){background:var(--accent-hover)}
 .perm-deny{border:1px solid var(--red);background:transparent;color:var(--red)}
 .perm-deny:hover:not(:disabled){background:rgba(239,68,68,.1)}
+.perm-result{font-size:12px}
+.perm-result.allowed{color:var(--green)}
+.perm-result.denied{color:var(--red)}
+.perm-result.none{color:var(--chat-fg-secondary)}
 
 @media (max-width: 768px) {
   .sidebar{position:fixed;left:0;top:0;bottom:0;z-index:50;transform:translateX(-100%);opacity:0}
@@ -469,7 +473,6 @@ select.modal-input{margin-bottom:0}
       <div class="term-overlay-body" id="term-container"></div>
     </div>
   </main>
-  <div id="perm-cards"></div>
 </div>
 
 <!-- Connect Device Modal -->

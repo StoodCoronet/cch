@@ -411,11 +411,15 @@ function loadMessages() {
         var messages = data.messages || [];
         if (messages.length === 0) {
             container.innerHTML = '<div class="empty">No messages yet.</div>';
+            restorePermCards();
             return;
         }
         container.innerHTML = "";
         messages.forEach(function(m) { renderMessage(container, m); });
         scrollToBottom();
+        // Re-render pending permission cards wiped by the rebuild, and
+        // refresh from the server (selectSession / reconnect path).
+        restorePermCards();
     }).catch(function(e) {
         $("messages-inner").innerHTML = '<div class="empty">Cannot load messages.</div>';
         console.error(e);
@@ -780,9 +784,9 @@ $("msg-input").addEventListener("keydown", function(e) {
 });
 $("send-btn").onclick = sendMessage;
 
-// ===== Permission approval cards (floating, bottom-right) =====
+// ===== Permission approval cards (inline in the transcript) =====
 
-var permCards = {}; // reqId -> {el, timer}
+var permRequests = {}; // reqId -> {req, status: pending|responding|resolved, timer, el}
 
 // Key-argument summary for a tool call (Bash → command, Read/Edit → file_path,
 // else the first string arg), truncated for the card.
@@ -808,47 +812,99 @@ function permSessionTitle(sessionId) {
 }
 
 function addPermCard(req) {
-    if (!req || !req.reqId || permCards[req.reqId]) return;
-    var box = $("perm-cards");
-    var el = document.createElement("div");
-    el.className = "perm-card";
+    if (!req || !req.reqId) return;
+    var rec = permRequests[req.reqId];
+    if (rec && rec.status === "resolved") return;
+    if (!rec) rec = permRequests[req.reqId] = { req: req, status: "pending", timer: null, el: null };
+    if (req.sessionId === currentSessionId) renderInlinePermCard(rec);
+}
+
+function renderInlinePermCard(rec) {
+    var req = rec.req;
+    if (rec.el && document.contains(rec.el)) return; // already rendered
+    var container = $("messages-inner");
+    var empty = container.querySelector(".empty");
+    if (empty) empty.remove();
     var arg = permKeyArg(req.toolName, req.input);
+    var argsText = "";
+    if (req.input) {
+        try { argsText = JSON.stringify(req.input, null, 2); } catch (e) { argsText = String(req.input); }
+    }
+    var el = document.createElement("div");
+    el.className = "perm-inline";
     el.innerHTML =
-        '<div class="perm-title">Permission required</div>' +
-        '<div class="perm-tool">' + esc(req.toolName || "tool") + (arg ? '<span class="perm-arg">(' + esc(arg) + ")</span>" : "") + '</div>' +
-        '<div class="perm-session" title="Open session">' + esc(permSessionTitle(req.sessionId)) + '</div>' +
+        '<div class="perm-inline-head">' +
+            '<div class="perm-inline-title">⚠ Permission required</div>' +
+            '<div class="perm-inline-tool">' + esc(req.toolName || "tool") + (arg ? '<span class="perm-arg">(' + esc(arg) + ")</span>" : "") + '</div>' +
+            '<div class="perm-inline-session">' + esc(permSessionTitle(req.sessionId)) + '</div>' +
+        '</div>' +
+        (argsText ? '<pre class="perm-inline-args"></pre>' : '') +
         '<div class="perm-actions">' +
             '<button class="perm-allow">Allow</button>' +
             '<button class="perm-deny">Deny</button>' +
         '</div>';
+    if (argsText) {
+        el.querySelector(".perm-inline-args").textContent = argsText;
+        var head = el.querySelector(".perm-inline-head");
+        head.title = "Click to expand args";
+        head.onclick = function() { el.classList.toggle("open"); };
+    }
     el.querySelector(".perm-allow").onclick = function() { respondPerm(req.reqId, "allow"); };
     el.querySelector(".perm-deny").onclick = function() { respondPerm(req.reqId, "deny"); };
-    el.querySelector(".perm-session").onclick = function() {
-        var found = null;
-        allSessions.forEach(function(s) { if (s.id === req.sessionId) found = s; });
-        if (found) selectSession(found);
-    };
-    // Newest on top
-    box.insertBefore(el, box.firstChild);
-    permCards[req.reqId] = { el: el, timer: null };
+    container.appendChild(el);
+    rec.el = el;
+    scrollToBottom();
 }
 
-function removePermCard(reqId) {
-    var card = permCards[reqId];
-    if (!card) return;
-    if (card.timer) clearTimeout(card.timer);
-    card.el.remove();
-    delete permCards[reqId];
+// Settle a card: swap the buttons for a result line. Cards outside the
+// current session's flow only get their cache status updated.
+function resolvePermCard(reqId, decision, source) {
+    var rec = permRequests[reqId];
+    if (!rec) return;
+    rec.status = "resolved";
+    if (rec.timer) { clearTimeout(rec.timer); rec.timer = null; }
+    var el = rec.el;
+    if (!el || !document.contains(el)) return;
+    var cls, text;
+    if (decision === "allow") { cls = "allowed"; text = "✓ Allowed"; }
+    else if (decision === "deny") { cls = "denied"; text = "✗ Denied"; }
+    else { cls = "none"; text = "○ No response (timed out or handled locally)"; }
+    var actions = el.querySelector(".perm-actions");
+    actions.innerHTML = '<div class="perm-result ' + cls + '">' + text + '</div>';
+    el.classList.remove("sending");
 }
 
 function respondPerm(reqId, decision) {
-    var card = permCards[reqId];
-    if (!card || card.timer) return; // already sending
+    var rec = permRequests[reqId];
+    if (!rec || rec.status !== "pending") return;
+    rec.status = "responding";
     if (socket) socket.emit("perm:respond", { reqId: reqId, decision: decision });
-    // Sending state until permission-resolved arrives (3s fallback)
-    card.el.classList.add("sending");
-    card.el.querySelectorAll("button").forEach(function(b) { b.disabled = true; });
-    card.timer = setTimeout(function() { removePermCard(reqId); }, 3000);
+    if (rec.el && document.contains(rec.el)) {
+        rec.el.classList.add("sending");
+        rec.el.querySelectorAll("button").forEach(function(b) { b.disabled = true; });
+    }
+    // No resolved event in time — settle locally as no-response
+    rec.timer = setTimeout(function() { resolvePermCard(reqId, null, "timeout"); }, 10000);
+}
+
+function requestPermList() {
+    if (!socket || !socket.connected) return;
+    socket.emit("perm:list", {}, function(ack) {
+        if (!ack || !ack.ok || !Array.isArray(ack.requests)) return;
+        ack.requests.forEach(addPermCard);
+    });
+}
+
+// Re-render pending cards after the transcript reloads (session switch,
+// reconnect), then refresh from the server for anything we missed.
+function restorePermCards() {
+    for (var id in permRequests) {
+        var rec = permRequests[id];
+        if (rec.status !== "resolved" && rec.req.sessionId === currentSessionId) {
+            renderInlinePermCard(rec);
+        }
+    }
+    requestPermList();
 }
 
 // ===== Live terminal overlay (xterm.js over Socket.IO relay) =====
@@ -1203,10 +1259,7 @@ function initSocket() {
             joinTerminal(currentSessionId);
         }
         // Restore pending permission cards (page reloads/reconnects lose them)
-        socket.emit("perm:list", {}, function(ack) {
-            if (!ack || !ack.ok || !Array.isArray(ack.requests)) return;
-            ack.requests.forEach(addPermCard);
-        });
+        requestPermList();
     });
 
     socket.on('connect_error', function(err) {
@@ -1228,7 +1281,7 @@ function initSocket() {
             return;
         }
         if (payload.type === 'permission-resolved') {
-            removePermCard(payload.reqId);
+            resolvePermCard(payload.reqId, payload.decision, payload.source);
             return;
         }
         if (!payload.sessionId) return;
