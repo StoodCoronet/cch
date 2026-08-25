@@ -382,6 +382,7 @@ export function sessionRoutes(app: Fastify) {
                     claudeSessionId: z.string().optional(),
                     cwd: z.string().optional(),
                     deviceName: z.string().optional(),
+                    profile: z.string().optional(),
                 }).optional()
             })
         },

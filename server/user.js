@@ -707,6 +707,26 @@ function waitForRunning(sessionId) {
     });
 }
 
+
+// Profile for resuming a conversation: the row's persisted profile (daemon
+// records what the session was launched with) beats the kv memory chain.
+function persistedProfile(sessionId, claudeSessionId) {
+    var live = sessionMeta[sessionId] || {};
+    if (live.profile) return Promise.resolve(live.profile);
+    var row = null;
+    allSessions.forEach(function(s) { if (s.id === sessionId) row = s; });
+    if (row && row.metadata) {
+        try {
+            var m = JSON.parse(row.metadata);
+            if (m && m.profile) return Promise.resolve(m.profile);
+        } catch (e) { /* plain hostname string */ }
+    }
+    return kvGet("profile:conv:" + claudeSessionId).then(function(v) {
+        if (v) return v;
+        return kvGet("profile:last").then(function(v2) { return v2 || "default"; });
+    });
+}
+
 function resumeAndSend(text) {
     var meta = sessionMeta[currentSessionId] || {};
     var claudeSessionId = meta.claudeSessionId;
@@ -719,10 +739,7 @@ function resumeAndSend(text) {
     setInputBusy(true);
     setInputError("");
     var machineId = meta.deviceName || undefined;
-    kvGet("profile:conv:" + claudeSessionId).then(function(v) {
-        if (v) return v;
-        return kvGet("profile:last").then(function(v2) { return v2 || "default"; });
-    }).then(function(profileName) {
+    persistedProfile(currentSessionId, claudeSessionId).then(function(profileName) {
         return ccdRpc("spawn", { cwd: cwd, profileName: profileName, resumeId: claudeSessionId }, machineId);
     }).then(function(res) {
         // Tag dedup on the server usually returns the same sessionId
@@ -1697,10 +1714,21 @@ function resumeFromAddModal(cardEl, machineId, cwd, conv) {
     var profileName = $("add-profile").value;
     var profilePromise = profileName
         ? Promise.resolve(profileName)
-        : kvGet("profile:conv:" + id).then(function(v) {
-            if (v) return v;
-            return kvGet("profile:last").then(function(v2) { return v2 || "default"; });
-        });
+        : (function() {
+            // A server row for this conversation may carry the launch profile
+            for (var i = 0; i < allSessions.length; i++) {
+                try {
+                    var m = JSON.parse(allSessions[i].metadata || "{}");
+                    if (m && m.claudeSessionId === id && m.profile) {
+                        return Promise.resolve(m.profile);
+                    }
+                } catch (e) { /* plain hostname */ }
+            }
+            return kvGet("profile:conv:" + id).then(function(v) {
+                if (v) return v;
+                return kvGet("profile:last").then(function(v2) { return v2 || "default"; });
+            });
+        })();
     profilePromise.then(function(name) {
         return ccdRpc("spawn", { cwd: cwd, profileName: name, resumeId: id }, machineId).then(function(res) {
             kvPut("profile:conv:" + id, name);

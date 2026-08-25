@@ -216,6 +216,9 @@ function sessionMeta(session) {
         title: session.title || null,
         cwd: session.cwd,
         deviceName: hostname,
+        // The profile this session was launched with — web-side resume must
+        // reuse it, otherwise the resumed claude boots unauthenticated.
+        profile: session.profile ? session.profile.name : null,
     };
 }
 
