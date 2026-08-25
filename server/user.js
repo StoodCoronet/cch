@@ -132,27 +132,15 @@ function closeSidebar() {
     $("sidebar").classList.remove("open");
 }
 
-// Dismissed sessions are hidden from the sidebar via the "dismissed-sessions"
-// KV record (a JSON array of sessionIds). Session.active is an online
-// indicator (flips false after 10min idle), so the list itself is unfiltered.
-function getDismissedSessions() {
-    return kvGet("dismissed-sessions").then(function(raw) {
-        var dismissed = [];
-        try { dismissed = JSON.parse(raw || "[]"); } catch (e) { dismissed = []; }
-        return Array.isArray(dismissed) ? dismissed : [];
-    });
-}
-
+// Deleting a session (single or Clear) hard-deletes the server row. The row
+// reappears when the host becomes active again (daemon re-registers on write
+// failures, and resume recreates it via tag alignment).
 function loadSessions() {
-    return getDismissedSessions().then(function(dismissed) {
-        return api("GET", "/v1/sessions").then(function(data) {
-            console.log("loadSessions response:", data);
-            allSessions = (data.sessions || []).filter(function(s) {
-                return dismissed.indexOf(s.id) === -1;
-            });
-            $("scount").textContent = allSessions.length;
-            renderSessions(allSessions);
-        });
+    return api("GET", "/v1/sessions").then(function(data) {
+        console.log("loadSessions response:", data);
+        allSessions = data.sessions || [];
+        $("scount").textContent = allSessions.length;
+        renderSessions(allSessions);
     }).catch(function(e) { console.error("loadSessions error:", e); });
 }
 
@@ -213,7 +201,7 @@ function renderSessionItem(s) {
             '<span>' + (s.msgCount || 0) + ' msgs</span>' +
             '<span>·</span>' +
             '<span>' + ago(s.activeAt) + '</span>' +
-            '<button class="delete-btn" onclick="dismissSession(\'' + s.id.replace(/'/g, "\\'") + '\', event)">×</button>' +
+            '<button class="delete-btn" onclick="deleteSession(\'' + s.id.replace(/'/g, "\\'") + '\', event)">×</button>' +
         '</div>';
     el.onclick = function() { selectSession(s); closeSidebar(); };
     return el;
@@ -266,8 +254,6 @@ function clearAllSessions() {
     if (!n) return;
     if (!confirm("Delete all " + n + " sessions from the server? Local conversations on your devices are NOT affected. Running sessions will reappear if their host posts again.")) return;
     api("DELETE", "/v1/sessions").then(function(res) {
-        // Rows are gone, so the dismiss records are meaningless — reset them.
-        kvPut("dismissed-sessions", "[]");
         closeTerminal(true);
         currentSessionId = null;
         currentSession = null;
@@ -326,15 +312,12 @@ function selectSession(s) {
     loadMessages();
 }
 
-// Dismiss a session from the sidebar. The server record is kept on purpose —
-// permanent row deletion is what the Clear button does.
-function dismissSession(id, event) {
+// Delete a session's server record. Same semantics as Clear: it comes back
+// when the host resumes/reactivates that conversation.
+function deleteSession(id, event) {
     if (event) { event.stopPropagation(); event.preventDefault(); }
-    if (!confirm("Dismiss this session from the sidebar? The server record is kept — use Clear to delete it permanently.")) return;
-    getDismissedSessions().then(function(dismissed) {
-        if (dismissed.indexOf(id) === -1) dismissed.push(id);
-        return kvPut("dismissed-sessions", JSON.stringify(dismissed));
-    }).then(function() {
+    if (!confirm("Delete this session from the server? The conversation on the device is NOT affected — it comes back when resumed.")) return;
+    api("DELETE", "/v1/sessions/" + id).then(function() {
         allSessions = allSessions.filter(function(s) { return s.id !== id; });
         $("scount").textContent = allSessions.length;
         if (currentSessionId === id) {

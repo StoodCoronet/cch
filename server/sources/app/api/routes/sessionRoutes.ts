@@ -565,6 +565,15 @@ export function sessionRoutes(app: Fastify) {
             }),
         },
     }, async (request, reply) => {
+        // Orphan messages are invisible forever — the session must exist.
+        // (Also what the ccd daemon relies on to detect web-side row deletion.)
+        const session = await db.session.findFirst({
+            where: { id: request.params.sessionId, accountId: request.userId },
+            select: { id: true },
+        });
+        if (!session) {
+            return reply.code(404).send({ error: 'Session not found' });
+        }
         const msg = await db.plaintextMessage.create({
             data: {
                 sessionId: request.params.sessionId,

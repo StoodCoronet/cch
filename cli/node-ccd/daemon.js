@@ -174,7 +174,23 @@ async function updateServerTag(session) {
             return;
         }
         console.error(`updateServerTag failed: ${e.message}`);
+        recoverIfRowGone(session, e);
     }
+}
+
+// The web lets users delete session rows at any time. When our row is gone,
+// writes fail — detect that, drop serverReady, and re-register via
+// create-or-load so the conversation reappears on the server by itself.
+async function recoverIfRowGone(session, err) {
+    const status = err && err.response && err.response.status;
+    if (status !== 404 && status !== 400) return;
+    if (!session.serverReady) return;
+    console.warn(`server row ${session.sessionId} seems gone (${status}); re-registering`);
+    if (sessions.get(session.sessionId) === session) sessions.delete(session.sessionId);
+    session.sessionId = null;
+    session.serverReady = false;
+    session.finalizing = false;
+    finalizeServerSession(session);
 }
 
 async function postMessage(session, role, content, metadata = {}) {
@@ -188,6 +204,9 @@ async function postMessage(session, role, content, metadata = {}) {
         });
     } catch (e) {
         console.error(`postMessage error (session ${session.sessionId}): ${e.message}`);
+        // Re-queue the failed message so it lands once the row is re-registered
+        session.pendingMessages.unshift({ role, content, metadata });
+        recoverIfRowGone(session, e);
     }
 }
 
