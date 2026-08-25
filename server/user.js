@@ -184,12 +184,25 @@ function groupLastActive(g) {
     return t;
 }
 
+// Title shown in the sidebar: live socket meta > persisted row meta > tag.
+// The persisted meta (daemon PATCHes it onto the row) is what makes
+// conversation names survive a page refresh.
+function sessionDisplayTitle(s) {
+    var live = (sessionMeta[s.id] || {}).title;
+    if (live) return live;
+    try {
+        var persisted = JSON.parse(s.metadata || "{}");
+        if (persisted && persisted.title) return persisted.title;
+    } catch (e) { /* metadata may be a plain hostname string */ }
+    return null;
+}
+
 function renderSessionItem(s) {
     var el = document.createElement("div");
     var st = sessionStates[s.id];
     el.className = "session-item" + (s.id === currentSessionId ? " selected" : "") + (st && st.state === "exited" ? " exited" : "");
     var meta = sessionMeta[s.id] || {};
-    var title = (meta.title || s.tag || s.id.slice(0, 10)).replace(/[&<>]/g, "");
+    var title = (sessionDisplayTitle(s) || s.tag || s.id.slice(0, 10)).replace(/[&<>]/g, "");
     var device = meta.deviceName || s.machineName || "";
     el.innerHTML =
         '<div class="title">' +

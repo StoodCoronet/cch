@@ -232,6 +232,13 @@ function emitTermRegister(session) {
 function emitTermMeta(session) {
     if (!socket || !socket.connected || !session.serverReady) return;
     socket.emit('term:meta', { sessionId: session.sessionId, meta: sessionMeta(session) });
+    // Persist display meta on the row so the sidebar shows conversation names
+    // after a page refresh (in-memory socket events are not enough).
+    const m = sessionMeta(session);
+    if (m.title || m.claudeSessionId) {
+        restRequest('patch', `/v1/sessions/${session.sessionId}`, { meta: m })
+            .catch(() => {});
+    }
 }
 
 function emitTermState(session, state, exitCode) {

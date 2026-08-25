@@ -375,14 +375,21 @@ export function sessionRoutes(app: Fastify) {
                 sessionId: z.string()
             }),
             body: z.object({
-                active: z.boolean().optional()
+                active: z.boolean().optional(),
+                // Daemon-pushed display meta so titles survive page refreshes
+                meta: z.object({
+                    title: z.string().optional(),
+                    claudeSessionId: z.string().optional(),
+                    cwd: z.string().optional(),
+                    deviceName: z.string().optional(),
+                }).optional()
             })
         },
         preHandler: app.authenticate
     }, async (request, reply) => {
         const userId = request.userId;
         const { sessionId } = request.params;
-        const { active } = request.body;
+        const { active, meta } = request.body;
 
         const session = await db.session.findFirst({
             where: { id: sessionId, accountId: userId }
@@ -394,6 +401,20 @@ export function sessionRoutes(app: Fastify) {
             await db.session.update({
                 where: { id: sessionId },
                 data: { active }
+            });
+        }
+        if (meta) {
+            // metadata column is a free-form string; historically the plain
+            // hostname. Preserve it under {hostname} when upgrading to JSON.
+            let existing: Record<string, any> = {};
+            try {
+                existing = JSON.parse(session.metadata || '{}');
+            } catch {
+                existing = session.metadata ? { hostname: session.metadata } : {};
+            }
+            await db.session.update({
+                where: { id: sessionId },
+                data: { metadata: JSON.stringify({ ...existing, ...meta }) }
             });
         }
         return reply.send({ ok: true });
