@@ -711,8 +711,8 @@ function waitForRunning(sessionId) {
 // Profile for resuming a conversation: the row's persisted profile (daemon
 // records what the session was launched with) beats the kv memory chain.
 function persistedProfile(sessionId, claudeSessionId) {
-    var live = sessionMeta[sessionId] || {};
-    if (live.profile) return Promise.resolve(live.profile);
+    // Row-persisted profile first: the live meta in this browser may be stale
+    // (poisoned by an earlier wrong-profile session and cached across reloads).
     var row = null;
     allSessions.forEach(function(s) { if (s.id === sessionId) row = s; });
     if (row && row.metadata) {
@@ -721,6 +721,8 @@ function persistedProfile(sessionId, claudeSessionId) {
             if (m && m.profile) return Promise.resolve(m.profile);
         } catch (e) { /* plain hostname string */ }
     }
+    var live = sessionMeta[sessionId] || {};
+    if (live.profile) return Promise.resolve(live.profile);
     return kvGet("profile:conv:" + claudeSessionId).then(function(v) {
         if (v) return v;
         return kvGet("profile:last").then(function(v2) { return v2 || "default"; });
