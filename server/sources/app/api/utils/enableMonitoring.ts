@@ -2,6 +2,10 @@ import { db } from "@/storage/db";
 import { Fastify } from "../types";
 import { httpRequestsCounter, httpRequestDurationHistogram, getMetricsLabelsFromRequest } from "@/app/monitoring/metrics2";
 import { log } from "@/utils/log";
+import { readFileSync } from "node:fs";
+
+// Single source of truth for the server version (bump on release)
+const SERVER_VERSION = JSON.parse(readFileSync(process.cwd() + "/package.json", "utf-8")).version;
 
 export function enableMonitoring(app: Fastify) {
     // Add metrics hooks
@@ -31,7 +35,8 @@ export function enableMonitoring(app: Fastify) {
             reply.send({
                 status: 'ok',
                 timestamp: new Date().toISOString(),
-                service: 'happy-server'
+                service: 'happy-server',
+                version: SERVER_VERSION
             });
         } catch (error) {
             log({ module: 'health', level: 'error' }, `Health check failed: ${error}`);
