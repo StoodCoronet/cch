@@ -364,6 +364,16 @@ function handlePermissionRequest(msg) {
 // which keeps its original meaning: resume the latest jsonl for this cwd.
 function spawnSession({ profile, cwd, cols, rows, resume, resumeId }) {
     const localId = 'tmp-' + crypto.randomUUID();
+    // One watcher per cwd: older sessions in this directory yield. Otherwise
+    // every session's watcher in the same dir adopts the same jsonl (mtime-
+    // after-spawn rule) and each message gets posted once per session.
+    for (const other of sessions.values()) {
+        if (other.cwd === cwd && other.watcher) {
+            console.log(`watcher of ${other.sessionId || other.localId} yields to new session in same cwd`);
+            other.watcher.stop();
+            other.watcher = null;
+        }
+    }
     const env = {
         ...process.env,
         ...(profile.env || {}),
