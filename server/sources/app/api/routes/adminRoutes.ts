@@ -330,22 +330,22 @@ export function adminRoutes(app: Fastify) {
 
     // Static files for admin and user dashboards
     app.get('/admin', async (_request, reply) => {
-        reply.type('text/html').send(readFileSync(process.cwd() + "/admin.html", "utf-8"));
+        reply.header('Cache-Control', 'no-cache').type('text/html').send(readFileSync(process.cwd() + "/admin.html", "utf-8"));
     });
     app.get('/admin.js', async (_request, reply) => {
-        reply.type('application/javascript').send(readFileSync(process.cwd() + "/admin.js", "utf-8"));
+        reply.header('Cache-Control', 'no-cache').type('application/javascript').send(readFileSync(process.cwd() + "/admin.js", "utf-8"));
     });
     app.get('/', async (_request, reply) => {
-        reply.type('text/html').send(readFileSync(process.cwd() + "/user.html", "utf-8"));
+        reply.header('Cache-Control', 'no-cache').type('text/html').send(readFileSync(process.cwd() + "/user.html", "utf-8"));
     });
     app.get('/user.js', async (_request, reply) => {
-        reply.type('application/javascript').send(readFileSync(process.cwd() + "/user.js", "utf-8"));
+        reply.header('Cache-Control', 'no-cache').type('application/javascript').send(readFileSync(process.cwd() + "/user.js", "utf-8"));
     });
     app.get('/register', async (_request, reply) => {
-        reply.type('text/html').send(readFileSync(process.cwd() + "/register.html", "utf-8"));
+        reply.header('Cache-Control', 'no-cache').type('text/html').send(readFileSync(process.cwd() + "/register.html", "utf-8"));
     });
     app.get('/register.js', async (_request, reply) => {
-        reply.type('application/javascript').send(readFileSync(process.cwd() + "/register.js", "utf-8"));
+        reply.header('Cache-Control', 'no-cache').type('application/javascript').send(readFileSync(process.cwd() + "/register.js", "utf-8"));
     });
     // Locally vendored browser libs (socket.io client, xterm) — avoids CDN
     // flakiness and works on restricted networks.
