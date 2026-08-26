@@ -114,3 +114,17 @@ web (xterm.js) ◀─term-output── server ◀── node-ccd daemon ◀─�
 ## 11. 权限批准桥接（2026-08-22，01cb2b4）
 
 claude PreToolUse hook（per-session --settings，timeout 60s）→ hook.js 经 unix socket 问 daemon → daemon 挂起并经 server 中继 perm:request → web 浮动卡片 Allow/Deny → 原路返回。55s 无响应 hook 静默退出 → claude 本地 TUI 正常弹框（双端不互卡）。profile 开 skip_permissions 时不触发。
+
+## 12. 导航布局重设计（2026-08-25 访谈定稿）
+
+**桌面端**：
+- 顶栏两行：row1 = logo+版本号 + `+ Device`；row2 = 小图标右对齐（折叠 sidebar、刷新、登出[门形图标]）
+- 设置从顶栏移到 sidebar 底部独立一行（"Settings"）
+- sidebar 折叠：顶栏图标 + Cmd/Ctrl+B 快捷键，状态存 localStorage
+
+**移动端（Android/iOS/PWA）**：
+- 底部 tab 栏：会话(≡ 抽屉) / Add(+) / Settings(⚙)
+- 主题切换、刷新、登出全部收进 Settings 页（判定为低频）
+- Settings 页内容：改密码、主题切换、登出、版本号
+
+文件：server/user.html + server/user.js

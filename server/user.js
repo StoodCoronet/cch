@@ -23,25 +23,29 @@ var $ = function(id) { return document.getElementById(id); };
 
 function applyTheme() {
     document.documentElement.setAttribute("data-theme", THEME);
-    $("theme-btn").textContent = THEME === "dark" ? "☀" : "🌙";
+    var isDark = THEME === "dark";
+    $("theme-light-btn").classList.toggle("active", !isDark);
+    $("theme-dark-btn").classList.toggle("active", isDark);
 }
 applyTheme();
-$("theme-btn").onclick = function() {
-    THEME = THEME === "light" ? "dark" : "light";
+function setTheme(t) {
+    THEME = t;
     localStorage.setItem("cch_theme", THEME);
     applyTheme();
-};
+}
+$("theme-light-btn").onclick = function() { setTheme("light"); };
+$("theme-dark-btn").onclick = function() { setTheme("dark"); };
 
 // Resizable sidebar
 (function initResizer() {
     var saved = parseInt(localStorage.getItem("cch_sidebar_width") || "", 10);
-    if (saved >= 220 && saved <= 500) setSidebarWidth(saved);
+    if (saved >= 240 && saved <= 500) setSidebarWidth(saved);
     var resizer = $("resizer");
     var app = $("app");
     var startX, startWidth, dragging = false;
     function onMove(e) {
         if (!dragging) return;
-        var w = Math.max(220, Math.min(500, startWidth + e.clientX - startX));
+        var w = Math.max(240, Math.min(500, startWidth + e.clientX - startX));
         setSidebarWidth(w);
     }
     function onUp() {
@@ -65,6 +69,40 @@ $("theme-btn").onclick = function() {
 function setSidebarWidth(w) {
     $("app").style.setProperty("--sidebar-width", w + "px");
 }
+
+// Sidebar collapse (VS Code style: button + Ctrl/Cmd+B), persisted
+var sidebarCollapsed = localStorage.getItem("cch_sidebar_collapsed") === "1";
+function applySidebarCollapsed() {
+    $("app").classList.toggle("sidebar-collapsed", sidebarCollapsed);
+    localStorage.setItem("cch_sidebar_collapsed", sidebarCollapsed ? "1" : "0");
+    // Keep the collapse/expand icons in sync (the collapse button lives in the sidebar header).
+    $("collapse-btn").innerHTML = sidebarCollapsed
+        ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/><path d="M15 9l-4 3 4 3"/></svg>'
+        : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/><path d="M9 9l4 3-4 3"/></svg>';
+}
+applySidebarCollapsed();
+$("collapse-btn").onclick = function() {
+    sidebarCollapsed = !sidebarCollapsed;
+    applySidebarCollapsed();
+};
+$("expand-btn").onclick = function() {
+    sidebarCollapsed = false;
+    applySidebarCollapsed();
+};
+document.addEventListener("keydown", function(e) {
+    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === "b" || e.key === "B")) {
+        e.preventDefault();
+        sidebarCollapsed = !sidebarCollapsed;
+        applySidebarCollapsed();
+    }
+});
+
+// Mobile bottom tab bar
+$("tab-sessions").onclick = function() {
+    $("sidebar").classList.toggle("open");
+};
+$("tab-add").onclick = openAddModal;
+$("tab-settings").onclick = openSettings;
 
 function api(method, path, body) {
     var h = { "Content-Type": "application/json", "Authorization": "Bearer " + TOKEN };
@@ -1206,6 +1244,8 @@ function closeSettings() {
 
 $("open-settings").onclick = openSettings;
 $("close-settings").onclick = closeSettings;
+$("settings-refresh-btn").onclick = function() { refresh(); };
+$("settings-logout-btn").onclick = logout;
 $("settings-modal").onclick = function(e) {
     if (e.target === $("settings-modal")) closeSettings();
 };
