@@ -358,16 +358,11 @@ select.modal-input{margin-bottom:0}
 .settings-version{margin-top:10px;font-size:11px;color:var(--fg-tertiary)}
 .mobile-only{display:none}
 
-/* Mobile bottom tab bar */
-.mobile-tabbar{display:none}
-
 @media (max-width: 768px) {
-  .mobile-tabbar{position:fixed;left:0;right:0;bottom:0;z-index:55;display:flex;background:var(--bg-elevated);border-top:1px solid var(--border);padding-bottom:env(safe-area-inset-bottom)}
-  .tab-item{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;padding:9px 0 7px;background:transparent;border:none;color:var(--fg-secondary);font-size:11px;font-weight:600;cursor:pointer}
-  .tab-item:active{color:var(--fg)}
-  .tab-item .tab-icon{font-size:17px;line-height:1}
   .mobile-only{display:block}
-  .main{padding-bottom:calc(54px + env(safe-area-inset-bottom))}
+  .icon-btn.mobile-only{display:flex}
+  .sidebar-footer{display:none}
+  .main{padding-bottom:env(safe-area-inset-bottom)}
 }
 
 .hidden{display:none}
@@ -471,6 +466,9 @@ select.modal-input{margin-bottom:0}
         <div class="spacer"></div>
         <button class="icon-btn" id="collapse-btn" title="Hide sidebar (Ctrl/Cmd+B)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/><path d="M9 9l4 3-4 3"/></svg>
+        </button>
+        <button class="icon-btn mobile-only" id="mobile-settings-btn" title="Settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         </button>
         <button class="icon-btn" id="refresh-btn" title="Refresh">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
@@ -640,13 +638,6 @@ select.modal-input{margin-bottom:0}
     </div>
   </div>
 </div>
-
-<!-- Mobile bottom tab bar -->
-<nav class="mobile-tabbar" id="mobile-tabbar">
-  <button class="tab-item" id="tab-sessions"><span class="tab-icon">≡</span><span>Sessions</span></button>
-  <button class="tab-item" id="tab-add"><span class="tab-icon">+</span><span>Add</span></button>
-  <button class="tab-item" id="tab-settings"><span class="tab-icon">⚙</span><span>Settings</span></button>
-</nav>
 
 <script src="/vendor/socket.io.min.js"></script>
 <script src="/vendor/xterm.js"></script>

@@ -97,13 +97,8 @@ document.addEventListener("keydown", function(e) {
     }
 });
 
-// Mobile bottom tab bar
-$("tab-sessions").onclick = function(e) {
-    if (e) { e.preventDefault(); e.stopPropagation(); }
-    $("sidebar").classList.toggle("open");
-};
-$("tab-add").onclick = openAddModal;
-$("tab-settings").onclick = openSettings;
+// Mobile-only settings icon in the sidebar header second row
+$("mobile-settings-btn").onclick = openSettings;
 
 function api(method, path, body) {
     var h = { "Content-Type": "application/json", "Authorization": "Bearer " + TOKEN };
