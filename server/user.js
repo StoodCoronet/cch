@@ -153,9 +153,10 @@ $("connect-modal").onclick = function(e) {
 };
 document.addEventListener("keydown", function(e) {
     if (e.key !== "Escape") return;
-    if ($("connect-modal").classList.contains("open")) closeModal();
-    if ($("add-modal").classList.contains("open")) closeAddModal();
-    if ($("settings-modal").classList.contains("open")) closeSettings();
+    if ($("connect-modal").classList.contains("open")) { closeModal(); return; }
+    if ($("add-modal").classList.contains("open")) { closeAddModal(); return; }
+    if ($("settings-modal").classList.contains("open")) { closeSettings(); return; }
+    if ($("sidebar").classList.contains("open")) { closeSidebar(); return; }
 });
 
 // Search
@@ -171,6 +172,12 @@ $("menu-btn").onclick = function(e) {
 function closeSidebar() {
     $("sidebar").classList.remove("open");
 }
+// Click outside the sidebar on mobile closes it (but not when tapping the hamburger itself)
+$("main").onclick = function(e) {
+    if ($("sidebar").classList.contains("open") && !e.target.closest("#menu-btn")) {
+        closeSidebar();
+    }
+};
 
 // Deleting a session (single or Clear) hard-deletes the server row. The row
 // reappears when the host becomes active again (daemon re-registers on write
