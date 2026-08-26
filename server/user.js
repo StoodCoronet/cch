@@ -98,7 +98,8 @@ document.addEventListener("keydown", function(e) {
 });
 
 // Mobile bottom tab bar
-$("tab-sessions").onclick = function() {
+$("tab-sessions").onclick = function(e) {
+    if (e) { e.preventDefault(); e.stopPropagation(); }
     $("sidebar").classList.toggle("open");
 };
 $("tab-add").onclick = openAddModal;
@@ -163,7 +164,8 @@ $("session-search").oninput = function() {
 };
 
 // Mobile menu
-$("menu-btn").onclick = function() {
+$("menu-btn").onclick = function(e) {
+    if (e) { e.preventDefault(); e.stopPropagation(); }
     $("sidebar").classList.toggle("open");
 };
 function closeSidebar() {
@@ -1067,6 +1069,7 @@ function finishLogin(d) {
         return;
     }
     showDashboard();
+    history.replaceState({}, "", "/");
 }
 
 function loginWithPassword() {
@@ -1265,6 +1268,7 @@ $("cp-btn").onclick = function() {
     doChangePassword("cp-current", "cp-new", "cp-confirm", "cp-error", this, function() {
         $("change-screen").style.display = "none";
         showDashboard();
+        history.replaceState({}, "", "/");
     });
 };
 ["cp-current", "cp-new", "cp-confirm"].forEach(function(id) {

@@ -71,7 +71,7 @@ button,input,textarea,select{font-family:inherit;font-size:inherit}
 .resizer{width:6px;position:absolute;right:-3px;top:0;bottom:0;cursor:col-resize;z-index:10;transition:background .15s}
 .resizer:hover,.resizer.dragging{background:var(--accent);opacity:.35}
 @media (max-width: 768px) {.resizer{display:none}}
-.sidebar-header{display:flex;flex-direction:column;border-bottom:1px solid var(--border);flex-shrink:0}
+.sidebar-header{display:flex;flex-direction:column;border-bottom:1px solid var(--border);flex-shrink:0;padding-top:env(safe-area-inset-top)}
 .header-row{height:52px;display:flex;align-items:center;padding:0 14px 0 18px;gap:10px}
 .header-row.header-icons{height:40px;gap:4px;border-top:1px solid var(--border);overflow:hidden;white-space:nowrap}
 @media (max-width: 768px) {#collapse-btn{display:none}}
@@ -169,7 +169,7 @@ button,input,textarea,select{font-family:inherit;font-size:inherit}
 .mobile-menu{display:none}
 
 /* Session status bar */
-.term-statusbar{height:36px;display:flex;align-items:center;padding:0 12px;gap:10px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--bg-elevated)}
+.term-statusbar{min-height:36px;display:flex;align-items:center;padding:env(safe-area-inset-top) max(12px, env(safe-area-inset-left)) 0 max(12px, env(safe-area-inset-left));gap:10px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--bg-elevated)}
 .term-statusbar .term-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;background:var(--fg-tertiary)}
 .term-statusbar .term-dot.running{background:var(--green);box-shadow:0 0 0 2px color-mix(in srgb,var(--green) 20%,transparent)}
 .term-statusbar .term-dot.offline{background:var(--fg-tertiary)}
@@ -253,7 +253,7 @@ button,input,textarea,select{font-family:inherit;font-size:inherit}
 .term-overlay-body .xterm{height:100%}
 
 /* Connect screen + forced password change screen */
-#connect-screen, #change-screen{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:var(--bg);z-index:100}
+#connect-screen, #change-screen{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:var(--bg);z-index:100;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
 .connect-card{width:min(420px, calc(100% - 32px));background:var(--bg-elevated);border:1px solid var(--border);border-radius:18px;padding:32px;box-shadow:var(--shadow)}
 .connect-card .logo-wrap{display:flex;align-items:center;justify-content:center;gap:12px;margin-bottom:8px}
 .connect-card .logo-wrap .logo-mark{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--accent),var(--accent-light))}
@@ -501,7 +501,9 @@ select.modal-input{margin-bottom:0}
       <button class="icon-btn desktop-only" id="expand-btn" title="Show sidebar (Ctrl/Cmd+B)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/><path d="M15 9l-4 3 4 3"/></svg>
       </button>
-      <button class="icon-btn mobile-menu" id="menu-btn">☰</button>
+      <button class="icon-btn mobile-menu" id="menu-btn" title="Open sidebar">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+      </button>
       <span class="term-dot hidden" id="term-dot"></span>
       <div class="term-title" id="term-title">Select a session</div>
       <div class="term-device" id="term-device"></div>
