@@ -403,8 +403,10 @@ select.modal-input{margin-bottom:0}
   .modal{width:min(420px, calc(100% - 32px));max-height:calc(100dvh - 40px);border-radius:18px;margin:auto}
   .modal-body{padding-bottom:calc(22px + env(safe-area-inset-bottom))}
   /* iOS Safari auto-zooms the page when a focused input is < 16px — keep form
-     controls at 16px on mobile so focusing never zooms/overflows the page */
-  input,textarea,select{font-size:16px}
+     controls at 16px on mobile so focusing never zooms/overflows the page.
+     Use !important because more specific selectors (e.g. #msg-input, .modal-input)
+     otherwise override the plain element rule. */
+  input,textarea,select,.modal-input,#msg-input,.connect-card input,.sidebar-search input{font-size:16px!important}
 }
 </style>
 </head>
