@@ -259,7 +259,9 @@ function renderSessionItem(s) {
     el.className = "session-item" + (s.id === currentSessionId ? " selected" : "") + (st && st.state === "exited" ? " exited" : "");
     var meta = sessionMeta[s.id] || {};
     var title = (sessionDisplayTitle(s) || s.tag || s.id.slice(0, 10)).replace(/[&<>]/g, "");
-    var device = meta.deviceName || s.machineName || "";
+    // Prefer the user-defined token label (machineName) over the daemon-reported hostname
+    // so the sidebar doesn't flicker from "m5mbp" to "RobyedeMacBook-Pro.local" on selection.
+    var device = s.machineName || meta.deviceName || "";
     el.innerHTML =
         '<div class="title">' +
             '<span class="dot ' + (s.active ? "active" : "idle") + '"></span>' +
@@ -441,7 +443,8 @@ function updateTermHeader() {
     if (!currentSession) return;
     var meta = sessionMeta[currentSessionId] || {};
     $("term-title").textContent = meta.title || currentSession.tag || currentSession.id.slice(0, 12);
-    $("term-device").textContent = meta.deviceName || currentSession.machineName || "";
+    // Show the token label as the device name; fallback to daemon hostname only if absent.
+    $("term-device").textContent = currentSession.machineName || meta.deviceName || "";
 }
 
 function applySessionMeta(sessionId, meta) {
