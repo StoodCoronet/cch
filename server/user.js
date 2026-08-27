@@ -113,9 +113,6 @@ document.addEventListener("keydown", function(e) {
     }
 });
 
-// Mobile-only settings icon in the sidebar header second row
-$("mobile-settings-btn").onclick = openSettings;
-
 function api(method, path, body) {
     var h = { "Content-Type": "application/json", "Authorization": "Bearer " + TOKEN };
     var o = { method: method, headers: h };
@@ -166,6 +163,7 @@ document.addEventListener("keydown", function(e) {
     if (e.key !== "Escape") return;
     if ($("connect-modal").classList.contains("open")) { closeModal(); return; }
     if ($("add-modal").classList.contains("open")) { closeAddModal(); return; }
+    if ($("password-modal").classList.contains("open")) { closePasswordModal(); return; }
     if ($("settings-modal").classList.contains("open")) { closeSettings(); return; }
     if ($("sidebar").classList.contains("open")) { closeSidebar(); return; }
 });
@@ -1252,34 +1250,51 @@ function doChangePassword(curId, newId, confirmId, errId, btn, onSuccess) {
 }
 
 function openSettings() {
-    ["sp-current", "sp-new", "sp-confirm"].forEach(function(id) { $(id).value = ""; });
-    var msg = $("sp-msg");
-    msg.style.color = "";
-    msg.textContent = "";
+    var note = $("pwd-changed-note");
+    if (note) note.classList.add("hidden");
     $("settings-modal").classList.add("open");
-    $("sp-current").focus();
 }
 function closeSettings() {
     $("settings-modal").classList.remove("open");
 }
 
+function openPasswordModal() {
+    ["pm-current", "pm-new", "pm-confirm"].forEach(function(id) { $(id).value = ""; });
+    $("pm-msg").textContent = "";
+    $("password-modal").classList.add("open");
+    $("pm-current").focus();
+}
+function closePasswordModal() {
+    $("password-modal").classList.remove("open");
+}
+
 $("open-settings").onclick = openSettings;
 $("close-settings").onclick = closeSettings;
+$("open-password-modal").onclick = openPasswordModal;
+$("close-password").onclick = closePasswordModal;
 $("settings-refresh-btn").onclick = function() { refresh(); };
 $("settings-logout-btn").onclick = logout;
 $("settings-modal").onclick = function(e) {
     if (e.target === $("settings-modal")) closeSettings();
 };
-$("sp-btn").onclick = function() {
-    doChangePassword("sp-current", "sp-new", "sp-confirm", "sp-msg", this, function() {
-        ["sp-current", "sp-new", "sp-confirm"].forEach(function(id) { $(id).value = ""; });
-        var msg = $("sp-msg");
-        msg.style.color = "var(--green)";
-        msg.textContent = "Password changed";
+$("password-modal").onclick = function(e) {
+    if (e.target === $("password-modal")) closePasswordModal();
+};
+$("pm-btn").onclick = function() {
+    var self = this;
+    doChangePassword("pm-current", "pm-new", "pm-confirm", "pm-msg", self, function() {
+        ["pm-current", "pm-new", "pm-confirm"].forEach(function(id) { $(id).value = ""; });
+        $("pm-msg").style.color = "var(--green)";
+        $("pm-msg").textContent = "Password changed";
+        setTimeout(function() {
+            closePasswordModal();
+            var note = $("pwd-changed-note");
+            if (note) { note.classList.remove("hidden"); note.textContent = "Password changed"; }
+        }, 600);
     });
 };
-["sp-current", "sp-new", "sp-confirm"].forEach(function(id) {
-    $(id).onkeydown = function(e) { if (e.key === "Enter") $("sp-btn").click(); };
+["pm-current", "pm-new", "pm-confirm"].forEach(function(id) {
+    $(id).onkeydown = function(e) { if (e.key === "Enter") $("pm-btn").click(); };
 });
 
 $("cp-btn").onclick = function() {

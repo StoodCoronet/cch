@@ -342,17 +342,15 @@ select.modal-input{margin-bottom:0}
 .cwd-conv-card.loading{opacity:.7;pointer-events:none;border-color:var(--accent)}
 
 /* Sidebar footer (Settings entry) */
-.sidebar-footer{flex-shrink:0;border-top:1px solid var(--border);padding:10px 14px}
-.settings-btn{width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--fg-secondary);font-size:13px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;transition:all .15s}
-.settings-btn:hover{background:var(--bg-hover);color:var(--fg);border-color:var(--border-strong)}
-
 /* Settings modal extras */
 .theme-options{display:flex;gap:10px}
 .theme-option{flex:1;padding:9px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--fg-secondary);font-size:13px;font-weight:600;cursor:pointer;transition:all .15s}
 .theme-option:hover{background:var(--bg-hover);color:var(--fg)}
 .theme-option.active{border-color:var(--accent);color:var(--accent);background:rgba(79,70,229,.08)}
 .font-size-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;font-size:13px;color:var(--fg-secondary)}
-.font-size-slider{width:100%;cursor:pointer}
+.font-size-slider{-webkit-appearance:none;appearance:none;width:100%;height:6px;background:var(--border);border-radius:3px;outline:none;cursor:pointer}
+.font-size-slider::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:18px;height:18px;background:var(--accent);border-radius:50%;cursor:pointer}
+.font-size-slider::-moz-range-thumb{width:18px;height:18px;background:var(--accent);border:none;border-radius:50%;cursor:pointer}
 .modal-btn-secondary{background:var(--bg);color:var(--fg);border:1px solid var(--border)}
 .modal-btn-secondary:hover{background:var(--bg-hover)}
 .settings-footer{margin-top:20px;padding-top:16px;border-top:1px solid var(--border);text-align:center}
@@ -363,8 +361,6 @@ select.modal-input{margin-bottom:0}
 
 @media (max-width: 768px) {
   .mobile-only{display:block}
-  .icon-btn.mobile-only{display:flex}
-  .sidebar-footer{display:none}
   .main{padding-bottom:env(safe-area-inset-bottom)}
 }
 
@@ -472,7 +468,7 @@ select.modal-input{margin-bottom:0}
         <button class="icon-btn" id="collapse-btn" title="Hide sidebar (Ctrl/Cmd+B)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/><path d="M9 9l4 3-4 3"/></svg>
         </button>
-        <button class="icon-btn mobile-only" id="mobile-settings-btn" title="Settings">
+        <button class="icon-btn" id="open-settings" title="Settings">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         </button>
         <button class="icon-btn" id="refresh-btn" title="Refresh">
@@ -496,9 +492,6 @@ select.modal-input{margin-bottom:0}
       </div>
     </div>
 
-    <div class="sidebar-footer">
-      <button class="settings-btn" id="open-settings">⚙ Settings</button>
-    </div>
   </aside>
 
   <main class="main" id="main">
@@ -619,11 +612,8 @@ select.modal-input{margin-bottom:0}
     <div class="modal-body">
       <div class="modal-section">
         <h3>Account</h3>
-        <input id="sp-current" class="modal-input" type="password" placeholder="Current password" autocomplete="current-password">
-        <input id="sp-new" class="modal-input" type="password" placeholder="New password (min 8 chars)" autocomplete="new-password">
-        <input id="sp-confirm" class="modal-input" type="password" placeholder="Confirm new password" autocomplete="new-password">
-        <button id="sp-btn" class="modal-btn">Change password</button>
-        <p class="error" id="sp-msg" style="text-align:center;margin-top:10px"></p>
+        <button id="open-password-modal" class="modal-btn modal-btn-secondary">Change password</button>
+        <p class="success-note hidden" id="pwd-changed-note" style="text-align:center;margin-top:10px;color:var(--green);font-size:13px">Password changed</p>
       </div>
       <div class="modal-section">
         <h3>Appearance</h3>
@@ -645,6 +635,23 @@ select.modal-input{margin-bottom:0}
         <button id="settings-logout-btn" class="settings-logout">Log out</button>
         <div class="settings-version">CCH v0.2.0</div>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- Change Password Modal -->
+<div class="modal-overlay" id="password-modal">
+  <div class="modal modal-narrow">
+    <div class="modal-header">
+      <h2>Change Password</h2>
+      <button class="modal-close" id="close-password">×</button>
+    </div>
+    <div class="modal-body">
+      <input id="pm-current" class="modal-input" type="password" placeholder="Current password" autocomplete="current-password">
+      <input id="pm-new" class="modal-input" type="password" placeholder="New password (min 8 chars)" autocomplete="new-password">
+      <input id="pm-confirm" class="modal-input" type="password" placeholder="Confirm new password" autocomplete="new-password">
+      <button id="pm-btn" class="modal-btn">Change password</button>
+      <p class="error" id="pm-msg" style="text-align:center;margin-top:10px"></p>
     </div>
   </div>
 </div>
