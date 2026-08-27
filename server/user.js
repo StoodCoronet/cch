@@ -2,6 +2,7 @@ var TOKEN = localStorage.getItem("cch_token") || "";
 var ACCOUNT_ID = localStorage.getItem("cch_account_id") || "";
 var SERVER = localStorage.getItem("cch_server") || window.location.origin;
 var THEME = localStorage.getItem("cch_theme") || "light";
+var FONT_SIZE = parseFloat(localStorage.getItem("cch_font_size") || "14.5");
 var currentSessionId = null;
 var currentSession = null;
 var allSessions = [];
@@ -35,6 +36,21 @@ function setTheme(t) {
 }
 $("theme-light-btn").onclick = function() { setTheme("light"); };
 $("theme-dark-btn").onclick = function() { setTheme("dark"); };
+
+function applyFontSize() {
+    if (isNaN(FONT_SIZE) || FONT_SIZE < 12 || FONT_SIZE > 20) FONT_SIZE = 14.5;
+    document.documentElement.style.setProperty("--base-font-size", FONT_SIZE + "px");
+    var slider = $("font-size-slider");
+    var value = $("font-size-value");
+    if (slider) slider.value = FONT_SIZE;
+    if (value) value.textContent = FONT_SIZE + "px";
+}
+applyFontSize();
+$("font-size-slider").oninput = function() {
+    FONT_SIZE = parseFloat(this.value);
+    localStorage.setItem("cch_font_size", FONT_SIZE);
+    applyFontSize();
+};
 
 // Resizable sidebar
 (function initResizer() {

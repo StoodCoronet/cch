@@ -59,9 +59,10 @@
   --shadow: 0 4px 24px rgba(0,0,0,.08);
 }
 
+:root{--base-font-size:14.5px}
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%}
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;background:var(--bg);color:var(--fg);line-height:1.55;font-size:14.5px}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;background:var(--bg);color:var(--fg);line-height:1.55;font-size:var(--base-font-size)}
 button,input,textarea,select{font-family:inherit;font-size:inherit}
 #app{display:flex;height:100vh;height:100dvh;width:100vw;overflow:hidden;--sidebar-width:280px}
 
@@ -350,6 +351,8 @@ select.modal-input{margin-bottom:0}
 .theme-option{flex:1;padding:9px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--fg-secondary);font-size:13px;font-weight:600;cursor:pointer;transition:all .15s}
 .theme-option:hover{background:var(--bg-hover);color:var(--fg)}
 .theme-option.active{border-color:var(--accent);color:var(--accent);background:rgba(79,70,229,.08)}
+.font-size-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;font-size:13px;color:var(--fg-secondary)}
+.font-size-slider{width:100%;cursor:pointer}
 .modal-btn-secondary{background:var(--bg);color:var(--fg);border:1px solid var(--border)}
 .modal-btn-secondary:hover{background:var(--bg-hover)}
 .settings-footer{margin-top:20px;padding-top:16px;border-top:1px solid var(--border);text-align:center}
@@ -628,6 +631,11 @@ select.modal-input{margin-bottom:0}
           <button class="theme-option" id="theme-light-btn">☀ Light</button>
           <button class="theme-option" id="theme-dark-btn">🌙 Dark</button>
         </div>
+      </div>
+      <div class="modal-section">
+        <h3>Display</h3>
+        <div class="font-size-row"><span>Font size</span><span id="font-size-value">14.5px</span></div>
+        <input id="font-size-slider" class="font-size-slider" type="range" min="12" max="20" step="0.5" value="14.5">
       </div>
       <div class="modal-section mobile-only" id="settings-session-section">
         <h3>Session</h3>
