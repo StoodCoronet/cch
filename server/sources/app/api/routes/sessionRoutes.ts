@@ -43,6 +43,10 @@ export function sessionRoutes(app: Fastify) {
                 dataEncryptionKey: true,
                 active: true,
                 lastActiveAt: true,
+                accessKeys: {
+                    select: { machineId: true },
+                    take: 1
+                }
                 // messages: {
                 //     orderBy: { seq: 'desc' },
                 //     take: 1,
@@ -67,12 +71,33 @@ export function sessionRoutes(app: Fastify) {
             : [];
         const countMap = new Map(messageCounts.map((c) => [c.sessionId, c._count.sessionId]));
 
+        const machineIds = sessions
+            .map((v) => v.accessKeys[0]?.machineId)
+            .filter((id): id is string => Boolean(id));
+        const tokenLabels = new Map<string, string>();
+        if (machineIds.length) {
+            const tokens = await db.bootstrapToken.findMany({
+                where: { accountId: userId, machineId: { in: machineIds } },
+                select: { machineId: true, label: true }
+            });
+            tokens.forEach((t) => {
+                if (t.label && t.machineId) tokenLabels.set(t.machineId, t.label);
+            });
+        }
+
         return reply.send({
             sessions: sessions.map((v) => {
                 // const lastMessage = v.messages[0];
                 const sessionUpdatedAt = v.updatedAt.getTime();
                 // const lastMessageCreatedAt = lastMessage ? lastMessage.createdAt.getTime() : 0;
                 const msgCount = countMap.get(v.id) || 0;
+                const machineId = v.accessKeys[0]?.machineId || null;
+                const machineLabel = machineId ? tokenLabels.get(machineId) || null : null;
+                let metaDeviceName: string | null = null;
+                try {
+                    const parsed = JSON.parse(v.metadata || '{}');
+                    metaDeviceName = (parsed && typeof parsed.deviceName === 'string' && parsed.deviceName) || null;
+                } catch { /* metadata may be a plain string */ }
 
                 return {
                     id: v.id,
@@ -88,7 +113,8 @@ export function sessionRoutes(app: Fastify) {
                     agentStateVersion: v.agentStateVersion,
                     dataEncryptionKey: v.dataEncryptionKey ? Buffer.from(v.dataEncryptionKey).toString('base64') : null,
                     lastMessage: null,
-                    machineName: v.tag,
+                    machineId: machineId,
+                    machineName: machineLabel || metaDeviceName || v.tag,
                     msgCount: msgCount,
                     isPlaintext: msgCount > 0
                 };
