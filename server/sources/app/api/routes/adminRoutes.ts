@@ -80,7 +80,7 @@ export function adminRoutes(app: Fastify) {
             data: {
                 accountId: account.id,
                 key: 'must-change-password',
-                value: new Uint8Array(Buffer.from("1")),
+                value: Buffer.from("1"),
             },
         });
 

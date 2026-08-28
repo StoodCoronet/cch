@@ -63,11 +63,11 @@ export function kvRoutes(app: Fastify) {
             create: {
                 accountId: userId,
                 key,
-                value: new Uint8Array(Buffer.from(value, 'utf8')),
+                value: Buffer.from(value, 'utf8'),
                 version: 0
             },
             update: {
-                value: new Uint8Array(Buffer.from(value, 'utf8')),
+                value: Buffer.from(value, 'utf8'),
                 version: { increment: 1 }
             }
         });
