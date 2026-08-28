@@ -52,6 +52,25 @@ cargo build --release
 
 `http://localhost:3005/` — 用户 dashboard，看 session 和机器
 
+## iPhone / 移动端使用
+
+### iPhone（PWA）
+
+不需要 Apple Developer 账号，直接通过 Safari "Add to Home Screen" 安装：
+
+1. iPhone Safari 打开 server 地址，例如 `http://<你的服务器>:3005/`。
+2. 登录账号。
+3. 点击底部分享按钮 → **Add to Home Screen**（添加到主屏幕）。
+4. 主屏幕会出现 ccc 图标，点击即可全屏运行，体验和原生 App 接近。
+
+> 首次添加前建议先登录，这样 PWA 打开后会保持登录状态。
+
+### Android
+
+去 GitHub Releases 下载最新的 `app-debug.apk` 安装即可：
+
+<https://github.com/StoodCoronet/cch/releases>
+
 ## 常用命令
 
 ```bash
