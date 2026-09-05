@@ -9,6 +9,7 @@ packages/wire/dist/
 # Environment (contains secrets)
 .env
 server/.env
+cli/node-ccd/.env
 
 # PGlite data
 server/data/
