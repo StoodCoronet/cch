@@ -325,8 +325,9 @@ export function authRoutes(app: Fastify) {
         }
 
         const authToken = await auth.createToken(account.id, { password: true });
-        const mustChange = await db.userKVStore.findUnique({
-            where: { accountId_key: { accountId: account.id, key: 'must-change-password' } }
+        const mustChange = await db.userKVStore.findFirst({
+            where: { accountId: account.id, key: 'must-change-password' },
+            select: { id: true }
         });
         return reply.send({ token: authToken, accountId: account.id, mustChangePassword: mustChange !== null });
     });
