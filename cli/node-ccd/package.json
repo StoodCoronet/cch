@@ -4,8 +4,8 @@
   "description": "Local daemon + CLI that runs claude sessions in PTYs and mirrors them to a self-hosted cch server",
   "main": "index.js",
   "bin": {
-    "ccd": "./bin/ccd.js",
-    "cch": "./bin/cch.js"
+    "ccd": "bin/ccd.js",
+    "cch": "bin/cch.js"
   },
   "files": [
     "bin",
