@@ -1,6 +1,6 @@
 {
   "name": "cch-ccd",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Local daemon + CLI that runs claude sessions in PTYs and mirrors them to a self-hosted cch server",
   "main": "index.js",
   "bin": {

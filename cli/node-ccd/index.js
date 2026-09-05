@@ -363,11 +363,20 @@ async function cmdDefault() {
 }
 
 // --- Main ---
+function printVersion() {
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf-8'));
+    console.log(`${pkg.name} v${pkg.version}`);
+}
+
 async function main() {
     const args = process.argv.slice(2);
     const cmd = args[0];
 
     switch (cmd) {
+        case '--version':
+        case '-version':
+        case '-v':
+            return printVersion();
         case 'connect': return cmdConnect(args[1]);
         case 'start': return cmdStart();
         case 'stop': return cmdStop();
