@@ -14,10 +14,11 @@ cch (Rust CLI) ──HTTP──→ cch-server (阿里云) ←── 浏览器/�
 ## 项目结构
 
 ```
-cli/          cch 命令行 (Rust)，代替 cct，直连 server
-server/       cch-server (Node.js + PGlite)，内嵌 admin + user dashboard
-app/          手机 App (Expo RN)，待开发
-packages/wire 共享消息协议
+cli/node-ccd/  Node 版 daemon（推荐），启动/接管 Claude Code 并同步到 server
+cli/           Rust 版 cch/ccd（历史代码，当前默认不使用）
+server/        cch-server (Node.js + PGlite)，内嵌 admin + user dashboard
+app/           手机 App (Expo RN / PWA)
+packages/wire  共享消息协议
 ```
 
 ## 快速开始
@@ -32,11 +33,17 @@ pnpm standalone:dev
 
 浏览器打开 `http://localhost:3005/admin`（密码：admin123）
 
-### 2. Build CLI
+### 2. 安装 ccd
 
 ```bash
-cd cli
-cargo build --release
+npm install -g cch-ccd
+```
+
+如果 npm 提示 `allow-scripts` 警告，需要先批准 install 脚本（否则 `node-pty` 原生模块无法编译）：
+
+```bash
+npm approve-scripts @anthropic-ai/claude-code node-pty
+npm install -g cch-ccd
 ```
 
 ### 3. 连接
@@ -44,8 +51,8 @@ cargo build --release
 从 dashboard 的 "Connect a Device" 生成 token，然后：
 
 ```bash
-./target/release/cch connect "http://localhost:3005/connect?token=xxx"
-./target/release/cch run --profile default "hello"
+ccd connect 'http://localhost:3005/connect?token=xxx'
+ccd
 ```
 
 ### 4. 查看
@@ -81,20 +88,11 @@ ccd 是本地守护进程，负责启动/接管 Claude Code session 并同步到
 npm install -g cch-ccd
 ```
 
-安装后会得到 `ccd` 和 `cch` 两个命令：
+如果 npm 提示 `allow-scripts` 警告，需要先批准 install 脚本（否则 `node-pty` 原生模块无法编译）：
 
 ```bash
-# 连接 server（token 在 dashboard 生成）
-ccd connect 'http://<你的服务器>:3005/connect?token=xxx'
-
-# 启动交互式 session
-ccd
-
-# 列出历史 session
-ccd ls
-
-# 断连
-ccd disconnect
+npm approve-scripts @anthropic-ai/claude-code node-pty
+npm install -g cch-ccd
 ```
 
 ### 从源码运行
@@ -106,14 +104,61 @@ npm link        # 或者直接用 ./bin/ccd.js
 ccd connect 'http://<你的服务器>:3005/connect?token=xxx'
 ```
 
-## 常用命令
+## 使用教程
+
+### 1. 连接 server
+
+在 web dashboard（`/admin` 或用户首页）点击 **Connect a Device**，输入标签后生成 token，复制连接命令：
 
 ```bash
-cch connect <url>     # 连接 server
-cch disconnect        # 断开
-cch status            # 查看状态
-cch run <profile>     # 启动 session
-cch                   # TUI 模式
+ccd connect 'http://<你的服务器>:3005/connect?token=xxx'
+```
+
+连接成功后会保存到 `~/.cch/token`，后续命令自动使用该配置。
+
+### 2. 启动 session
+
+直接运行 `ccd`，会弹出 profile 选择界面，选择后进入 Claude Code 交互界面：
+
+```bash
+ccd
+```
+
+### 3. 断开与重连
+
+- 在 session 里按 `Ctrl+B` 再按 `D` 可以 detach，session 仍在后台运行。
+- 列出所有 session：
+  ```bash
+  ccd ls
+  ```
+- 重新 attach 某个 session：
+  ```bash
+  ccd attach <session-id>
+  ```
+- 交互式选择并 attach：
+  ```bash
+  ccd -a
+  ```
+
+### 4. 停止 daemon
+
+```bash
+ccd stop
+```
+
+### 5. 常用命令速查
+
+```bash
+ccd --version              # 查看版本
+ccd connect <url>          # 连接 server
+ccd start                  # 启动 daemon（通常自动完成）
+ccd stop                   # 停止 daemon
+ccd status                 # 查看 daemon 和 session 状态
+ccd ls                     # 列出历史 session
+ccd attach <id>            # attach 到指定 session
+ccd -a                     # 交互式选择 session 并 attach
+ccd spawn <profile> [cwd]  # 非交互式启动 session
+ccd conversations <cwd>    # 列出该目录下的 Claude Code conversations
 ```
 
 ## 部署
