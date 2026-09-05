@@ -71,6 +71,41 @@ cargo build --release
 
 <https://github.com/StoodCoronet/cch/releases>
 
+## 安装 ccd（Node daemon）
+
+ccd 是本地守护进程，负责启动/接管 Claude Code session 并同步到 cch-server。需要 Node.js 20+。
+
+### 通过 npm 全局安装
+
+```bash
+npm install -g cch-ccd
+```
+
+安装后会得到 `ccd` 和 `cch` 两个命令：
+
+```bash
+# 连接 server（token 在 dashboard 生成）
+ccd connect 'http://<你的服务器>:3005/connect?token=xxx'
+
+# 启动交互式 session
+ccd
+
+# 列出历史 session
+ccd ls
+
+# 断连
+ccd disconnect
+```
+
+### 从源码运行
+
+```bash
+cd cli/node-ccd
+npm install
+npm link        # 或者直接用 ./bin/ccd.js
+ccd connect 'http://<你的服务器>:3005/connect?token=xxx'
+```
+
 ## 常用命令
 
 ```bash
