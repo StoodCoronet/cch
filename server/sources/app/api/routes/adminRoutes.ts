@@ -74,16 +74,6 @@ export function adminRoutes(app: Fastify) {
             },
         });
 
-        // Mark admin-provisioned accounts for a forced password change on
-        // first login (cleared by POST /v1/auth/change-password)
-        await db.userKVStore.create({
-            data: {
-                accountId: account.id,
-                key: 'must-change-password',
-                value: Buffer.from("1"),
-            },
-        });
-
         await backupNow();
 
         return reply.send({

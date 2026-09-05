@@ -67,6 +67,7 @@ button,input{font-family:inherit;font-size:inherit}
 .admin-header .logo::before{content:"";width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,var(--accent),var(--accent-light))}
 .admin-header .spacer{flex:1}
 .server-url{color:var(--fg-secondary);font-family:"SF Mono","Fira Code",monospace;font-size:12px}
+.version-badge{font-family:"SF Mono","Fira Code",monospace;font-size:11px;color:var(--fg-tertiary);background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:4px 8px}
 #theme-btn{width:36px;height:36px;border-radius:10px;border:1px solid var(--border);background:var(--bg-elevated);color:var(--fg);cursor:pointer;font-size:15px}
 #theme-btn:hover{background:var(--bg-hover)}
 
@@ -148,6 +149,7 @@ tr:last-child td{border-bottom:none}
             <div class="logo">CCH Admin</div>
             <div class="spacer"></div>
             <div class="server-url" id="server-url-display"></div>
+            <div class="version-badge" id="version-badge">v—</div>
             <button id="theme-btn" title="Toggle theme">🌙</button>
         </div>
 
@@ -231,6 +233,11 @@ tr:last-child td{border-bottom:none}
     document.documentElement.setAttribute("data-theme", t);
     this.textContent = t === "dark" ? "☀" : "🌙";
   };
+
+  fetch('/health').then(function(r){ return r.json(); }).then(function(j){
+    var badge = document.getElementById('version-badge');
+    if (badge && j.version) badge.textContent = 'v' + j.version;
+  }).catch(function(){});
 })();
 </script>
 </body>
