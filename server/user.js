@@ -427,6 +427,7 @@ function setTermState(state, exitCode) {
         txt.textContent = "session not running";
     }
     updateInputState();
+    refreshResumeProfileRow();
 }
 
 function updateInputState() {
@@ -452,7 +453,7 @@ function applySessionMeta(sessionId, meta) {
     var merged = sessionMeta[sessionId] || {};
     for (var k in meta) merged[k] = meta[k];
     sessionMeta[sessionId] = merged;
-    if (sessionId === currentSessionId) updateTermHeader();
+    if (sessionId === currentSessionId) { updateTermHeader(); refreshResumeProfileRow(); }
     renderSessions(allSessions);
 }
 
@@ -732,6 +733,7 @@ var resumeSendBusy = false;
 function setInputBusy(busy) {
     $("msg-input").disabled = busy;
     $("send-btn").disabled = busy;
+    $("resume-profile").disabled = busy || termState === "running";
     if (busy) $("msg-input").placeholder = "resuming session...";
 }
 
@@ -771,6 +773,99 @@ function waitForRunning(sessionId) {
 }
 
 
+// Resume-with-profile dropdown: visible while the selected session is not
+// running. Preselects the persisted launch profile; the user may switch to
+// another profile before the resume spawn fires. Without this, auto-resume
+// could silently boot claude with an unrelated (or no-auth) profile — the
+// "Not logged in · Please run /login" failure.
+var resumeProfileCache = {}; // machineId → profiles from list-profiles
+
+// Row metadata is JSON after the daemon's term:meta PATCH; older rows carry
+// the plain hostname string (JSON.parse throws) — return null then.
+function sessionRowMeta(sessionId) {
+    for (var i = 0; i < allSessions.length; i++) {
+        if (allSessions[i].id !== sessionId) continue;
+        try {
+            var m = JSON.parse(allSessions[i].metadata || "{}");
+            if (m && typeof m === "object") return m;
+        } catch (e) { /* plain hostname string */ }
+        break;
+    }
+    return null;
+}
+
+function resumeSessionMachineId() {
+    return (sessionMeta[currentSessionId] || {}).deviceName
+        || (currentSession && currentSession.machineId)
+        || null;
+}
+
+function fillResumeProfileRow(persistedName) {
+    var sel = $("resume-profile");
+    var machineId = resumeSessionMachineId();
+    var list = machineId ? resumeProfileCache[machineId] : null;
+    if (!list) return false;
+    sel.innerHTML = "";
+    var names = list.map(function(p) { return p.name; });
+    if (persistedName && names.indexOf(persistedName) === -1) {
+        // Keep the saved profile visible and selected even when the device no
+        // longer defines it — resuming with it fails loudly ("profile not
+        // found") instead of silently picking an unrelated profile.
+        var missing = document.createElement("option");
+        missing.value = persistedName;
+        missing.textContent = persistedName + " (not on device)";
+        sel.appendChild(missing);
+    }
+    list.forEach(function(p) {
+        var opt = document.createElement("option");
+        opt.value = p.name;
+        var label = p.name;
+        if (p.model) label += " · " + p.model;
+        if (p.backend && p.backend !== "claude") label += " · " + p.backend;
+        opt.textContent = label;
+        sel.appendChild(opt);
+    });
+    if (persistedName) sel.value = persistedName;
+    if (!sel.value && sel.options.length) sel.selectedIndex = 0;
+    sel.disabled = false;
+    return true;
+}
+
+function refreshResumeProfileRow() {
+    var row = $("resume-profile-row");
+    var sel = $("resume-profile");
+    if (!currentSessionId || termState === "running") {
+        row.classList.add("hidden");
+        return;
+    }
+    row.classList.remove("hidden");
+    sel.disabled = true;
+    if (resumeSendBusy) return; // the resume flow owns the control
+    var meta = sessionRowMeta(currentSessionId) || {};
+    var persistedName = meta.profile || (sessionMeta[currentSessionId] || {}).profile || null;
+    if (fillResumeProfileRow(persistedName)) return;
+    sel.innerHTML = '<option value="">loading profiles…</option>';
+    var machineId = resumeSessionMachineId();
+    if (!machineId) {
+        sel.innerHTML = '<option value="">device unknown — saved profile will be used</option>';
+        return;
+    }
+    var reqSession = currentSessionId;
+    ccdRpc("list-profiles", {}, machineId).then(function(res) {
+        if (reqSession !== currentSessionId) return; // user switched sessions
+        var profiles = (res && res.profiles) || [];
+        resumeProfileCache[machineId] = profiles;
+        if (!profiles.length) {
+            sel.innerHTML = '<option value="">no profiles on device — saved profile will be used</option>';
+            return;
+        }
+        fillResumeProfileRow(persistedName);
+    }).catch(function(e) {
+        if (reqSession !== currentSessionId) return;
+        sel.innerHTML = '<option value="">' + ((e && e.message) || "device offline") + '</option>';
+    });
+}
+
 // Profile for resuming a conversation: the row's persisted profile (daemon
 // records what the session was launched with) beats the kv memory chain.
 function persistedProfile(sessionId, claudeSessionId) {
@@ -788,7 +883,7 @@ function persistedProfile(sessionId, claudeSessionId) {
     if (live.profile) return Promise.resolve(live.profile);
     return kvGet("profile:conv:" + claudeSessionId).then(function(v) {
         if (v) return v;
-        return kvGet("profile:last").then(function(v2) { return v2 || "default"; });
+        return kvGet("profile:last").then(function(v2) { return v2 || null; });
     });
 }
 
@@ -800,12 +895,24 @@ function resumeAndSend(text) {
         setInputError("cannot resume: no claude session id");
         return;
     }
+    // Capture the explicit dropdown choice BEFORE setInputBusy disables the
+    // select — the disabled check must not swallow the user's selection.
+    var selProfile = $("resume-profile");
+    var chosenProfile = (!selProfile.disabled && selProfile.value) ? selProfile.value : null;
     resumeSendBusy = true;
     setInputBusy(true);
     setInputError("");
     var machineId = meta.deviceName || undefined;
-    persistedProfile(currentSessionId, claudeSessionId).then(function(profileName) {
-        return ccdRpc("spawn", { cwd: cwd, profileName: profileName, resumeId: claudeSessionId }, machineId);
+    // Explicit dropdown choice wins; an empty/error select falls back to the
+    // persisted-profile chain (row metadata → live meta → kv).
+    (chosenProfile ? Promise.resolve(chosenProfile) : persistedProfile(currentSessionId, claudeSessionId)).then(function(profileName) {
+        if (!profileName) throw new Error("no profile recorded for this session — pick one in the resume selector");
+        return ccdRpc("spawn", { cwd: cwd, profileName: profileName, resumeId: claudeSessionId }, machineId).then(function(res) {
+            // Record what actually ran so the kv memory chain follows reality.
+            kvPut("profile:conv:" + claudeSessionId, profileName);
+            kvPut("profile:last", profileName);
+            return res;
+        });
     }).then(function(res) {
         // Tag dedup on the server usually returns the same sessionId
         var sid = (res && res.sessionId) || currentSessionId;
@@ -1589,6 +1696,7 @@ var addAllConvsLoaded = false;
 var addDirConvs = [];       // conversations in the current Directory (default view)
 var addShowAll = false;     // "show all N" expanded for the default view
 var addBusy = false;        // a start/resume spawn is in flight
+var addProfilePicked = false; // true once the user explicitly picks a profile in the dropdown
 var cwdCommon = [];         // common dirs for the cwd autocomplete (from list-sessions)
 var cwdSuggestItems = [];   // currently shown autocomplete entries
 var cwdSuggestIndex = -1;   // keyboard-highlighted entry, -1 = none
@@ -1605,6 +1713,7 @@ function openAddModal() {
     $("add-error").textContent = "";
     $("add-search").value = "";
     $("add-profile").innerHTML = "";
+    addProfilePicked = false;
     $("add-device").innerHTML = '<option value="">Loading devices...</option>';
     addDevices = [];
     addAllConvs = [];
@@ -1836,8 +1945,8 @@ function renderAddSearchResults(box, q) {
     }
 }
 
-// Resume a conversation from a card (default or search mode alike): profile
-// comes from the modal dropdown when loaded, otherwise the kv memory chain.
+// Resume a conversation from a card (default or search mode alike): the
+// conversation's recorded profile wins; an explicit dropdown pick overrides.
 function resumeFromAddModal(cardEl, machineId, cwd, conv) {
     if (addBusy) return;
     addBusy = true;
@@ -1846,25 +1955,25 @@ function resumeFromAddModal(cardEl, machineId, cwd, conv) {
     var timeEl = cardEl.querySelector(".conv-time");
     if (timeEl) timeEl.textContent = "starting...";
     var id = conv.claudeSessionId;
-    var profileName = $("add-profile").value;
-    var profilePromise = profileName
-        ? Promise.resolve(profileName)
-        : (function() {
-            // A server row for this conversation may carry the launch profile
-            for (var i = 0; i < allSessions.length; i++) {
-                try {
-                    var m = JSON.parse(allSessions[i].metadata || "{}");
-                    if (m && m.claudeSessionId === id && m.profile) {
-                        return Promise.resolve(m.profile);
-                    }
-                } catch (e) { /* plain hostname */ }
-            }
-            return kvGet("profile:conv:" + id).then(function(v) {
-                if (v) return v;
-                return kvGet("profile:last").then(function(v2) { return v2 || "default"; });
-            });
-        })();
+    // The conversation's own recorded profile beats whatever the dropdown
+    // happens to highlight (often the first option, e.g. a credential-less
+    // "default") — resuming with the wrong profile boots claude without API
+    // credentials ("Not logged in"). An explicit dropdown pick still wins.
+    var explicit = (addProfilePicked && $("add-profile").value) || null;
+    var profilePromise = (function() {
+        if (explicit) return Promise.resolve(explicit);
+        for (var i = 0; i < allSessions.length; i++) {
+            try {
+                var m = JSON.parse(allSessions[i].metadata || "{}");
+                if (m && m.claudeSessionId === id && m.profile) {
+                    return Promise.resolve(m.profile);
+                }
+            } catch (e) { /* plain hostname */ }
+        }
+        return kvGet("profile:conv:" + id);
+    })();
     profilePromise.then(function(name) {
+        if (!name) throw new Error("no profile recorded for this conversation — pick one in the profile list");
         return ccdRpc("spawn", { cwd: cwd, profileName: name, resumeId: id }, machineId).then(function(res) {
             kvPut("profile:conv:" + id, name);
             kvPut("profile:last", name);
@@ -2023,7 +2132,7 @@ $("add-modal").onclick = function(e) {
     if (e.target === $("add-modal")) closeAddModal();
 };
 $("add-device").onchange = function() { selectAddDevice($("add-device").value); };
-$("add-profile").onchange = updateAddSubmit;
+$("add-profile").onchange = function() { addProfilePicked = true; updateAddSubmit(); };
 $("add-submit").onclick = submitAdd;
 $("add-search").addEventListener("input", function() {
     setConvStatus("");

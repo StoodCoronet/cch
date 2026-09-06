@@ -244,6 +244,12 @@ button,input,textarea,select{font-family:inherit;font-size:inherit}
 #send-btn:disabled{background:var(--chat-border);color:var(--chat-fg-secondary);cursor:not-allowed}
 #send-btn svg{width:16px;height:16px}
 .input-hint{text-align:center;font-size:calc(11px * var(--font-scale));color:var(--chat-fg-secondary);margin-top:8px;font-family:"SF Mono","Fira Code",monospace}
+.resume-profile-row{display:flex;align-items:center;gap:8px;margin:0 0 6px;font-size:calc(11px * var(--font-scale));color:var(--chat-fg-secondary);font-family:"SF Mono","Fira Code",monospace}
+.resume-profile-row.hidden{display:none}
+.resume-profile-row label{flex-shrink:0}
+.resume-profile-row select{background:transparent;color:var(--chat-fg);border:1px solid var(--chat-border);border-radius:6px;padding:3px 6px;font-size:calc(11px * var(--font-scale));font-family:inherit;max-width:280px}
+.resume-profile-row select:disabled{opacity:.55;cursor:not-allowed}
+
 
 /* Live terminal overlay (covers the transcript area; terminal is always dark) */
 .term-overlay{position:absolute;top:36px;left:0;right:0;bottom:0;z-index:20;display:flex;flex-direction:column;background:#0d0d0d}
@@ -515,6 +521,10 @@ select.modal-input{margin-bottom:0}
     </div>
     <div class="messages hidden" id="messages"><div class="messages-inner" id="messages-inner"></div></div>
     <div class="input-area hidden" id="input-area">
+      <div class="resume-profile-row hidden" id="resume-profile-row">
+        <label for="resume-profile">resume with</label>
+        <select id="resume-profile" disabled></select>
+      </div>
       <div class="input-wrapper">
         <textarea id="msg-input" rows="1" placeholder="session not running" disabled></textarea>
         <button id="send-btn" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9"></polygon></svg></button>

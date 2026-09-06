@@ -417,6 +417,12 @@ function spawnSession({ profile, cwd, cols, rows, resume, resumeId }) {
     env.TERM = 'xterm-256color';
     env.COLORTERM = 'truecolor';
     delete env.NO_COLOR;
+    // Loud marker for the "Not logged in" class of failures: the chosen
+    // profile carries no API credentials, so claude will demand /login.
+    var hasCredEnv = profile.env && (profile.env.ANTHROPIC_API_KEY || profile.env.ANTHROPIC_AUTH_TOKEN);
+    if (!profile.base_url && !hasCredEnv && !process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) {
+        console.log(`warning: profile '${profile.name}' has no API credentials (env/base_url) — claude may require /login`);
+    }
     // Resume mode: the claudeSessionId is either given explicitly (resumeId)
     // or resolved from the latest jsonl file name for this cwd (resume bool).
     let resumeClaudeSessionId = resumeId || null;
