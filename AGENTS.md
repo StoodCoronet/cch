@@ -1,363 +1,146 @@
-# AGENTS.md — CCH Monorepo Guide
+# Repository Guidelines
 
-This file is the entry point for AI coding agents working in the `self_host_happy` repository. It describes the project as it actually exists today, the boundaries between workspaces, the commands you need, and the conventions that are enforced in each part of the codebase.
+## Project Overview
 
-If you are working inside a single workspace, also read that workspace's local agent doc:
+CCH ("Claude Code with Happy") — self-hosted aggregation of Claude Code sessions. One server (e.g. Alibaba Cloud) collects sessions from many machines; users watch progress live from a browser or phone (PWA / Android APK). Historical note: `cch` / `happy` / `handy` naming all refer to this codebase — it is a fork of `slopus/happy-server`.
 
-- `cli/AGENTS.md` and `cli/ARCHITECTURE.md` for the Rust CLI
-- `server/CLAUDE.md` for the Node.js server
-- `app/CLAUDE.md` for the Expo/Tauri app
+## Architecture & Data Flow
 
----
+Four components, **two distinct session paths**:
 
-## 1. Project Overview
+- `server/` — `cch-server`: Fastify 5 + Zod + Prisma 6 over PGlite (embedded Postgres) or external Postgres/Redis. Serves REST + Socket.IO plus embedded dashboards (`admin.html/js`, `user.html/js`, `register.html` with vendored assets in `server/vendor/`).
+- `cli/node-ccd/` — **the active client**: `ccd` daemon (npm package `cch-ccd`, plain CommonJS JavaScript). Runs Claude Code sessions in `node-pty` and mirrors them to the server. `cli/` (Rust crate `cct`, bins also named `cch`/`ccd`) is **legacy/historical** — do not extend it for daemon features.
+- `app/` — Expo SDK ~55 / React Native 0.83 app (also PWA/web) + Tauri 2 macOS wrapper in `app/src-tauri/`.
+- `packages/wire/` — `@cch/wire`: shared Zod schemas + types, dual ESM/CJS built with pkgroll.
 
-CCH ("Claude Code with Happy") is a self-hosted aggregation system for Claude Code sessions. The goal is to run a single server (for example on Alibaba Cloud) that collects sessions from many machines, then let a user watch progress from a phone or browser.
+Data flow:
 
-High-level architecture:
+- **Plaintext path (ccd)**: daemon tails PTY/JSONL output → `POST /v1/sessions/:id/plaintext-messages` (or socket `ccd-message` event) → `PlaintextMessage` table → user dashboard renders interactive chat.
+- **E2E-encrypted path (app/cch)**: client encrypts locally (libsodium/tweetnacl; blobs look like `{t:'encrypted', c:base64}`) → `POST /v3/sessions/:id/messages` (localId dedup + seq allocation) → `eventRouter.emitUpdate` fans seq-numbered `CoreUpdateContainer` over Socket.IO `/v1/updates`.
+- **Device onboarding**: dashboard "Connect a Device" creates a `BootstrapToken` (only its SHA-256 hash is meaningful) → `ccd connect '<server>/connect?token=…'` exchanges it via `POST /v1/auth/bootstrap` → token cached in `~/.cch/token`.
+- Server-side field encryption (`server/sources/modules/encrypt.ts`, keyed by `HANDY_MASTER_SECRET`) is **server-at-rest** encryption — distinct from the client E2E layer. Never confuse the two.
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│ cch (Rust CLI) ──HTTP/Socket.IO──→ cch-server (Node.js + PGlite)   │
-│     exec claude                       ↑                              │
-│                                       │ browser / mobile             │
-│                    GitHub Actions ────┘                              │
-└─────────────────────────────────────────────────────────────────────┘
-```
+## Key Directories
 
-- **`cli/`** — `cch` and `ccd` binaries written in Rust. `cch` is a TUI launcher for `claude`/`codex`/`kimi` with named profiles, plus Happy-server connection commands. `ccd` is the daemon that reports local sessions to the server.
-- **`server/`** — `cch-server` (also historically called `happy-server`). Fastify + TypeScript. Serves the web dashboard (`/admin`, `/`) and the API, stores encrypted session data, and synchronizes devices over Socket.IO.
-- **`app/`** — React Native mobile app built with Expo SDK ~55, plus a Tauri-based macOS desktop wrapper. It is the Happy client that connects to the same server.
-- **`packages/wire/`** — shared TypeScript/Zod wire protocol consumed by the server, the CLI, and the app. The package name in this repo is `@cch/wire`.
+| Path | Purpose |
+|---|---|
+| `server/sources/app/api/routes/` | All HTTP route groups, one file per feature (`authRoutes`, `sessionRoutes`, `v3SessionRoutes`, `adminRoutes`, …) |
+| `server/sources/app/api/socket.ts` | Socket.IO server `/v1/updates`: auth middleware + handlers (rpc, session/machine/artifact updates, `ccd-message`) |
+| `server/sources/app/events/eventRouter.ts` | Central pub/sub: client registry, `emitUpdate`/`emitEphemeral` with recipient filters |
+| `server/sources/storage/` | `db.ts` (Prisma + PGlite/Postgres switch), files, redis, `inTx`, seq allocation |
+| `server/sources/app/auth/` | Token auth (`auth.ts` singleton), `bootstrapToken.ts`, password, email codes |
+| `server/sources/modules/encrypt.ts` | Server-at-rest KeyTree encryption from `HANDY_MASTER_SECRET` |
+| `server/prisma/` | `schema.prisma` (24 models) + SQL migrations (humans-only) |
+| `cli/node-ccd/` | Active daemon: `bin/ccd.js`, `daemon.js`, `session.js` (PTY), `attach.js`, `tui.js` (blessed) |
+| `cli/` | Legacy Rust `cct` TUI launcher (`src/main.rs` = `cch` bin, `src/daemon.rs` = `ccd` bin) |
+| `app/sources/app/` | expo-router page tree (root is `sources/app`, not `app/`) |
+| `app/sources/sync/` | Sync engine: `sync.ts` socket.io loop, per-domain `api*.ts`, `reducer/`, `serverConfig.ts` |
+| `app/sources/sync/encryption/` | E2E layer: master-secret key derivation, per-session/machine/artifact encryptors |
+| `app/sources/text/` | `t()` i18n: `_default.ts` (en base) + `translations/` (10 languages) |
+| `app/src-tauri/` | Tauri v2 wrapper hosting `expo export --platform web` output |
+| `packages/wire/src/` | `messages.ts` (socket updates), `sessionProtocol.ts` (session envelopes — **frozen, under review**) |
+| `patches/`, `scripts/` | pnpm patches (pglite/prisma, preact, livekit) + root `postinstall.cjs`, `release.cjs` |
+| `android/` | Gradle project producing the released `app-debug.apk` |
+| `docs/` | UI/API specs (`UI_SPEC.md`) + LLM prompt docs |
 
-The repository is a **pnpm workspace** (`pnpm-workspace.yaml` lists `server` and `packages/wire`). The CLI and app are not pnpm workspaces but live as separate subprojects under the same repository root.
-
-> Note: the codebases for `server/` and `app/` originate from the "Happy" project, while `cli/` is a Rust TUI launcher originally called `cct` that has been adapted for CCH. You will see both naming conventions in files, env vars, and URLs. Treat `cch`/`happy`/`handy` as the same lineage unless the local doc says otherwise.
-
----
-
-## 2. Technology Stack
-
-| Area | Technology |
-|------|------------|
-| Package manager | pnpm 10.11.0 (monorepo + app + server) |
-| CLI | Rust 2021 edition, Cargo, `clap`, `ratatui`, `crossterm`, `tokio`, `reqwest`, `rust_socketio` |
-| Server runtime | Node.js 20, TypeScript 5.9.3, `tsx` |
-| Server framework | Fastify 5 with `fastify-type-provider-zod` |
-| Server DB | Prisma 6.19.2 + PostgreSQL; standalone mode uses PGlite 0.3.15 |
-| Server cache/pub-sub | Redis (`ioredis`) in production; in-memory event bus in standalone |
-| Server real-time | Socket.IO 4 |
-| App | Expo SDK ~55, React Native 0.83.1, React 19.2.0, TypeScript strict, `react-native-unistyles` |
-| App desktop wrapper | Tauri 2 (`app/src-tauri/`) |
-| Shared schemas | Zod 4 in `@cch/wire` |
-| Tests | Vitest (TypeScript), `cargo test` (Rust), BATS (shell) |
-| Deployment | Docker, Docker Compose, GitHub Actions → GHCR → Alibaba Cloud ECS |
-
----
-
-## 3. Repository Layout
-
-```
-self_host_happy/
-├── cli/                     # Rust CLI (cch + ccd)
-│   ├── Cargo.toml           # package name is still "cct" for historical reasons
-│   ├── src/                 # main.rs (cch), daemon.rs (ccd), lib.rs, modules
-│   ├── tests/               # integration.rs, live.rs, install.bats
-│   ├── AGENTS.md            # detailed CLI agent guide
-│   └── ARCHITECTURE.md      # full architecture doc
-├── server/                  # cch-server / happy-server
-│   ├── package.json         # workspace package "cch-server"
-│   ├── sources/             # all TypeScript source
-│   │   ├── standalone.ts    # PGlite bootstrap + migrate/serve CLI
-│   │   ├── main.ts          # external-DB entry point
-│   │   ├── index.ts         # library entry point
-│   │   ├── app/api/         # Fastify routes, socket handlers, auth
-│   │   ├── storage/         # db, files, pgliteLoader, upload helpers
-│   │   ├── modules/         # encrypt, github
-│   │   └── utils/           # log, shutdown, backoff, lock, etc.
-│   ├── prisma/schema.prisma # single source of truth for DB schema
-│   ├── user.html / user.js  # user dashboard (being rewritten per spec.md)
-│   ├── admin.html / admin.js# admin dashboard
-│   ├── Dockerfile           # standalone single-container build
-│   ├── deploy/handy.yaml    # Kubernetes manifest (production cluster)
-│   └── CLAUDE.md            # detailed server agent guide
-├── app/                     # Expo React Native + Tauri desktop app
-│   ├── package.json         # package name "happy-app"
-│   ├── app.config.js        # Expo config with dev/preview/production variants
-│   ├── sources/             # app code, components, sync, encryption, text
-│   ├── src-tauri/           # Tauri Rust project
-│   └── CLAUDE.md            # detailed app agent guide
-├── packages/wire/           # shared wire protocol
-│   ├── package.json         # package name "@cch/wire"
-│   └── src/                 # messages.ts, sessionProtocol.ts, etc.
-├── .github/workflows/       # build-image.yml, deploy.yml (root repo)
-├── docker-compose.yml       # production self-host Compose
-├── pnpm-workspace.yaml      # server + packages/wire
-├── package.json             # root scripts only
-└── .npmrc                   # shamefully-hoist=true, node-linker=hoisted
-```
-
----
-
-## 4. Build & Test Commands
-
-Run all commands from the relevant workspace directory unless otherwise noted.
-
-### Root
+## Development Commands
 
 ```bash
-pnpm install                 # install all workspace dependencies
-pnpm server:dev              # pnpm --filter cch-server standalone:dev
-pnpm server:build            # pnpm --filter cch-server build
-pnpm wire:build              # pnpm --filter @cch/wire build
-```
-
-### Server
-
-```bash
-cd server
+# Root (pnpm workspace = server + packages/wire only)
 pnpm install
-pnpm standalone:dev          # recommended local dev: PGlite + .env.dev on port 3005
-pnpm standalone              # run with PGlite, env vars supplied by you
-pnpm dev                     # external Postgres + Redis mode (needs Docker services)
-pnpm build                   # TypeScript type-check only (runtime uses tsx)
-pnpm test                    # vitest run
-pnpm generate                # regenerate Prisma client
-pnpm migrate                 # run Prisma migrations against external Postgres
-```
+pnpm wire:build        # REQUIRED before server typecheck/tests on a clean checkout
+pnpm server:dev        # server standalone dev on :3005
+pnpm server:build      # server typecheck
 
-### CLI
+# Server (cd server)
+pnpm standalone:dev    # PGlite + .env.dev, applies migrations, seeds admin; http://localhost:3005/admin (admin123)
+pnpm test              # vitest run
+pnpm typecheck         # tsc --noEmit  ("build" is the same thing — runtime is tsx, no emit)
+pnpm generate          # prisma generate after schema edits (never write migrations yourself)
 
-```bash
-cd cli
-cargo build                  # debug build
-cargo build --release        # release build
-cargo test                   # unit + integration tests
-cargo test --test integration# mock E2E (no real claude binary)
-CCT_LIVE_TESTS=1 cargo test --test live   # live E2E (needs real claude binary)
-cargo clippy                 # lint
-cargo run                    # run the TUI
-cargo run --release -- run   # run a profile directly
-bats tests/install.bats      # shell installer tests (requires bats-core)
-```
+# Active daemon (cd cli/node-ccd) — npm, NOT pnpm
+npm install
+npm link               # or run directly: ./bin/ccd.js
+node test-e2e.js       # end-to-end check against a running server
 
-### App
-
-```bash
-cd app
+# App (cd app) — separate dependency tree, install separately
 pnpm install
-pnpm start                   # Expo development server
-pnpm ios                     # iOS simulator
-pnpm android                 # Android emulator
-pnpm web                     # web target
-pnpm typecheck               # run tsc --noEmit after changes
-pnpm test                    # vitest (watch mode)
+pnpm start             # Expo dev server (also: ios / android / web)
+pnpm typecheck         # run after EVERY change
+pnpm test              # vitest — watch mode in a TTY; use `pnpm exec vitest run` for one-shot
+pnpm tauri:dev         # macOS desktop wrapper
 
-# macOS Tauri desktop
-pnpm tauri:dev               # dev with hot reload
-pnpm tauri:build:production  # production build
+# Legacy Rust CLI (cd cli)
+cargo build && cargo test && cargo clippy -- -D warnings
+
+# Deploy
+docker compose up -d   # ghcr.io/stoodcoronet/cch-server + Caddy; data in cch-data:/data
 ```
 
-### Wire package
+## Code Conventions & Common Patterns
 
-```bash
-cd packages/wire
-pnpm install
-pnpm build                   # pkgroll build (requires dist before dependents typecheck)
-pnpm test                    # build + vitest run
-```
+TypeScript (all TS workspaces):
 
----
+- 4-space indent, strict mode, `pnpm` (never npm, except `cli/node-ccd`).
+- Absolute imports via `@/*` → `./sources/*` (server and app) / `@/` in app code.
+- Prefer interfaces over types; **no enums** — use string-literal maps or const objects.
+- Functional/declarative style; avoid classes (singletons like `export const auth = new AuthModule()` are the accepted exception).
 
-## 5. Development Workflow
+Server:
 
-1. **Install dependencies.** The root `pnpm install` covers the pnpm workspaces (`server`, `packages/wire`). The `app/` and `cli/` directories have their own dependency trees and must be installed separately:
-   ```bash
-   pnpm install                 # root workspaces
-   cd app && pnpm install       # Expo/React Native app
-   cd cli && cargo fetch        # Rust CLI
-   ```
-2. **Build `@cch/wire` before typechecking the server:**
-   ```bash
-   pnpm wire:build
-   ```
-   The server imports `@cch/wire` through its `dist/` exports, so a clean checkout will fail `pnpm server:build` until wire is built.
-3. **Start the server locally:**
-   ```bash
-   cd server
-   pnpm standalone:dev
-   ```
-   This loads `.env.dev`, applies PGlite migrations, seeds the admin user via `sources/init.ts`, and serves on `http://localhost:3005`. Admin is at `/admin` (default password `admin123` from local dev setup).
-4. **Build and run the CLI:**
-   ```bash
-   cd cli
-   cargo build --release
-   ./target/release/cch connect "http://localhost:3005/connect?token=xxx"
-   ./target/release/cch run --profile default "hello"
-   ```
-5. **Run tests before committing.** Server tests use Vitest with `tsconfigPaths`; CLI tests use Cargo.
+- Routes: `export function xRoutes(app: FastifyInstance)` registered in `api.ts`; validate with Zod schemas via the `fastify-type-provider-zod` type provider; guard with `preHandler: app.authenticate` (admin routes use the `adminAuth` helper instead).
+- Action/business files: entity-prefixed camelCase verb — `friendAdd.ts`, `feedGet.ts`; utility filename == function name; folders lowercase-dashed.
+- Transactions: wrap DB work in `inTx`; never do non-transactional side effects (uploads, external calls) inside a transaction.
+- Logging: `log({ module, level }, msg)` from `@/utils/log`; don't add logging unless asked.
+- Base64: use `privacyKit.encodeBase64`/`decodeBase64` instead of Buffer.
+- Config is env-var driven at use site (no config framework); background loops are started services with `onShutdown` hooks.
+- Write the test (`.spec.ts`) for shared utilities **before** the implementation.
 
----
+App:
 
-## 6. Code Style & Conventions
+- Every user-visible string through `t()` from `@/text`; add the key to **all** languages in `sources/text/translations/` (dev-only screens exempt).
+- Never use React Native `Alert` — use `@/modal` (`Modal.alert`, `Modal.confirm`).
+- Wrap pages in `memo`; use expo-router APIs, never raw react-navigation.
+- Styling: `StyleSheet.create((theme) => ({…}))` from react-native-unistyles at the bottom of the file; never use unistyles to size/tint `expo-image` (inline styles there).
+- Async operations via `useHappyAction` (returns `[loading, doAction]`, auto error handling); core UX principle: "never show a loading error, always just retry".
 
-### TypeScript (server, app, wire)
+Legacy Rust (`cli/`): `anyhow::Result` with `.context(...)`; edit TOML configs surgically with `toml_edit` (preserve user comments); mask any env key containing `TOKEN`/`KEY`/`SECRET` on every display path; `cargo clippy -- -D warnings` is enforced.
 
-- **Indentation: 4 spaces.** This is enforced in server and app docs; do not use 2 spaces.
-- **Strict TypeScript** is enabled everywhere.
-- **Absolute imports** with the `@/` alias mapping to `./sources/*`.
-- Prefer **interfaces over types**.
-- **Avoid enums**; use string-literal maps or const objects instead.
-- Prefer **functional/declarative** patterns; classes are rare.
-- Use descriptive boolean names (`isLoading`, `hasError`).
-- Test files use `.spec.ts` or `.test.ts` suffixes.
-- Server action files should be named with an entity prefix then action, e.g. `friendAdd.ts`.
+## Important Files
 
-### Rust (cli)
+- `server/sources/standalone.ts` — standalone entry: `migrate` + `serve` (PGlite, port 3005, throws without `HANDY_MASTER_SECRET`)
+- `server/sources/main.ts` / `index.ts` — dev entry / library entry (`startServer(opts)`)
+- `server/sources/app/api/api.ts` — Fastify assembly: plugins, Zod provider, all route registrations, static/SPA dashboard serving
+- `server/sources/storage/db.ts` — Prisma client; `DB_PROVIDER=pglite` vs external `DATABASE_URL`
+- `server/prisma/schema.prisma` — single source of truth for the 24 models; migrations are created by humans only
+- `server/.env.dev` — local dev env (`ADMIN_PASSWORD=admin123`, `PORT=3005`; `DEV_SEED_ACCOUNTS=true` seeds dev1–3@ccc.local)
+- `cli/node-ccd/bin/ccd.js` + `daemon.js` + `session.js` — active daemon entry, lifecycle, PTY session runner
+- `app/sources/app/(app)/` — real app screens; `_layout.tsx` files own headers/params
+- `app/sources/sync/sync.ts` — ~2800-line sync loop (socket.io, push, artifacts, friends)
+- `app/app.config.js` — `APP_ENV` variants (development/preview/production): bundle IDs, ATS rules (dev/preview allow arbitrary HTTP loads)
+- `packages/wire/src/messages.ts` / `sessionProtocol.ts` — socket update schemas / frozen session envelopes
+- `.github/workflows/build-image.yml`, `deploy.yml` — build GHCR image on master → SSH-deploy to ECS via compose
+- `docker-compose.yml` — `cch-server` + Caddy; required env: `HANDY_MASTER_SECRET`, `ADMIN_PASSWORD`, `PORT=3005`
 
-- Standard `cargo fmt` formatting (`rustfmt`).
-- `cargo clippy -- -D warnings` is enforced in CI.
-- No shared mutable global state; modules are flat and focused.
-- Use `anyhow` for error handling.
-- Use `toml_edit` for surgical config edits so user comments are preserved.
+## Runtime/Tooling Preferences
 
-### App-specific conventions
+- **pnpm 10.11.0** (`packageManager` pinned). Workspace contains **only** `server` + `packages/wire`; `app/` and `cli/node-ccd/` are separate trees with their own installs (`app/` uses pnpm + patch-package; `node-ccd` uses npm and ships as `cch-ccd`).
+- **Node 20**; server runtime is **tsx** — `pnpm build` is typecheck-only, do not add an emit/compile step.
+- `@cch/wire` resolves **only** through `dist/` (pkgroll dual ESM/CJS): run `pnpm wire:build` after touching `packages/wire/src` or nothing that imports it will typecheck.
+- `.npmrc` uses `shamefully-hoist=true` / `node-linker=hoisted` — undeclared deps may accidentally resolve; still declare what you import.
+- Binary patches live in `patches/` (applied by root `scripts/postinstall.cjs`) plus `patch-package` in the app.
+- Keep PRs minimal and scoped; no opportunistic refactors; don't create files/docs unless necessary.
 
-- All user-visible strings must go through the `t(...)` translation function; add keys to all languages in `sources/text/translations/`.
-- Use `react-native-unistyles` `StyleSheet.create` for styling; keep styles at the bottom of component files.
-- Wrap pages in `memo`.
-- Use `expo-router` APIs, not raw `react-navigation` APIs.
-- Use `useHappyAction` for async operations instead of manual error handling.
-- Do **not** use the React Native `Alert` module; use `@/modal` instead.
-- Do **not** use Unistyles for `expo-image` sizing/tint; use inline styles for those.
+## Testing & QA
 
----
+| Workspace | Framework | Command | Notes |
+|---|---|---|---|
+| `server` | Vitest | `pnpm test` (`vitest run`) | `globals: true`, `vite-tsconfig-paths`; mixed `*.spec.ts`/`*.test.ts` |
+| `app` | Vitest | `pnpm test` (watch in TTY) or `pnpm exec vitest run` | `globals: false` (import from 'vitest'); manual `'@'` alias — colocated under `sources/` |
+| `packages/wire` | Vitest | `pnpm test` | **Builds dist first**; `*.test.ts` in `src/` |
+| `cli/node-ccd` | script | `node test-e2e.js` | Needs a running server; no unit test setup |
+| `cli` (legacy) | cargo + BATS | `cargo test`, `bats tests/install.bats` | Live E2E gated by `CCT_LIVE_TESTS=1`; test isolation via `CCT_CONFIG`, `CCT_KIMI_CONFIG`, `CCT_CLAUDE_BIN` |
 
-## 7. Testing Strategy
-
-| Component | Framework | Notes |
-|-----------|-----------|-------|
-| Server | Vitest | `pnpm test` discovers `**/*.test.ts` and `**/*.spec.ts` with `vite-tsconfig-paths`. |
-| Wire | Vitest | `pnpm test` builds first, then runs tests. |
-| App | Vitest | `pnpm test` runs watch mode; many unit tests exist under `sources/`. |
-| CLI | Cargo + BATS | Unit tests inline in source; integration tests in `tests/`; live tests gated by `CCT_LIVE_TESTS=1`. |
-
-When adding utilities, the server convention is to **write the test before the implementation**. Do not add tests only as an afterthought for shared utilities.
-
-### Important CLI test env vars
-
-- `CCT_CONFIG` — override the TOML config path for tests.
-- `CCT_KIMI_CONFIG` — override `~/.kimi-code/config.toml` path for tests.
-- `CCT_CLAUDE_BIN` — substitute a fake binary for `check_claude_installed`.
-- `CCT_LIVE_TESTS=1` — enable the live E2E suite.
-
----
-
-## 8. Database & Migrations
-
-- The single schema file is `server/prisma/schema.prisma`.
-- In standalone/self-host mode the server uses **PGlite** (embedded Postgres) and applies SQL migrations from `server/prisma/migrations/` via `sources/standalone.ts`.
-- In production it uses external PostgreSQL via `DATABASE_URL` and Prisma Migrate.
-- **Do not create migrations yourself.** The server `CLAUDE.md` explicitly states migrations are created only by humans. Run `pnpm generate` when you need new Prisma types.
-- Use `inTx` to wrap DB operations in transactions.
-- Do not run non-transactional side effects (file uploads, external API calls) inside transactions.
-
----
-
-## 9. Deployment Processes
-
-### Self-hosted Docker / Docker Compose
-
-```bash
-docker compose up -d
-# or pull the published image first:
-docker compose pull && docker compose up -d
-```
-
-`docker-compose.yml` uses `ghcr.io/stoodcoronet/cch-server:latest` and expects:
-
-- `HANDY_MASTER_SECRET`
-- `ADMIN_PASSWORD`
-- `PORT=3005`
-
-Data is persisted in the `cch-data` volume.
-
-### CI/CD
-
-- `.github/workflows/build-image.yml` — builds the server Docker image and pushes to GHCR on every push to `master` that touches server/wire/build files.
-- `.github/workflows/deploy.yml` — waits 120 seconds for the image build, then SSHs into the Alibaba Cloud ECS host, pulls the image, and restarts Docker Compose.
-- `cli/.github/workflows/ci.yml` — runs `cargo fmt --check`, `cargo clippy`, and `cargo test` on push/PR to `master`.
-- `cli/.github/workflows/release.yml` — builds cross-platform release tarballs (`cct-<target>.tar.gz`) on version tags `v*`.
-
-### Kubernetes
-
-`server/deploy/handy.yaml` contains the production Kubernetes manifest for a 3-replica `handy-server` Deployment, Redis StatefulSet, ExternalSecret integration with Vault, Prometheus scrape annotations, and liveness/readiness probes on `/health`.
-
----
-
-## 10. Security Considerations
-
-- **End-to-end encryption:** session messages and machine metadata are encrypted on the client before reaching the server. The server stores only opaque encrypted blobs.
-- **Cryptographic auth:** the auth model uses public-key signatures, not passwords stored on the server.
-- **Bootstrap tokens:** self-hosted server provisioning uses `BootstrapToken` records with hashed tokens; tokens are generated in the admin dashboard and consumed by `cch connect <url>`.
-- **Secrets masking:** in the CLI, env keys containing `TOKEN`, `KEY`, or `SECRET` are redacted in the TUI and confirmation screens.
-- **Required secrets:**
-  - `HANDY_MASTER_SECRET` — master secret for server auth/encryption.
-  - `ADMIN_PASSWORD` — initial admin password for `/admin`.
-- **ATS / network policy:** the iOS app allows local-network access and, in dev/preview, arbitrary HTTP loads so developers can test against a local server without TLS.
-- **Attachment storage:** blobs are client-encrypted. When S3 is used, enable lifecycle expiration and SSE for defense-in-depth.
-
----
-
-## 11. Environment Variables Quick Reference
-
-### Server
-
-| Variable | Required? | Default | Purpose |
-|----------|-----------|---------|---------|
-| `HANDY_MASTER_SECRET` | yes | — | Master secret for auth/encryption |
-| `PORT` | no | 3005 | HTTP port |
-| `HOST` | no | 0.0.0.0 | Bind host |
-| `DATA_DIR` | no | `./data` | Base data directory |
-| `PGLITE_DIR` | no | `DATA_DIR/pglite` | PGlite database directory |
-| `DATABASE_URL` | no | — | External Postgres URL (bypasses PGlite) |
-| `REDIS_URL` | no | — | Redis URL (optional for standalone) |
-| `S3_HOST` / `S3_ACCESS_KEY` / `S3_SECRET_KEY` / `S3_BUCKET` | no | — | S3/MinIO file storage |
-| `PUBLIC_URL` | no | `http://localhost:3005` | Public base URL for file URLs |
-| `HAPPY_STATIC_DIR` | no | auto | Static webapp directory |
-| `DANGEROUSLY_LOG_TO_SERVER_FOR_AI_AUTO_DEBUGGING` | no | — | Enables remote log collection to `.logs/` |
-
-### CLI
-
-| Variable | Purpose |
-|----------|---------|
-| `CCT_CONFIG` | Override `profiles.toml` path |
-| `CCT_KIMI_CONFIG` | Override `~/.kimi-code/config.toml` path |
-| `CCT_CLAUDE_BIN` | Substitute binary name for install checks |
-| `CCT_LIVE_TESTS` | Enable live E2E tests |
-| `EDITOR` | Editor opened by `cch edit` (fallback `vi`) |
-
----
-
-## 12. Cross-Cutting Conventions
-
-- **Do not create files unless absolutely necessary.** Prefer editing existing files. This rule is repeated strongly in `server/CLAUDE.md` and `app/CLAUDE.md`.
-- **Do not proactively create documentation files** (`*.md`, READMEs) unless explicitly requested.
-- **Never create Prisma migrations yourself.**
-- **Always run `pnpm typecheck` after TypeScript changes** in `app/` or `server/`.
-- **Always run `cargo clippy` and `cargo test` after Rust changes** in `cli/`.
-- **Build `@cch/wire` before typechecking dependents** on a clean checkout.
-- Keep PRs minimal and scoped; avoid opportunistic refactors.
-- If you change a cross-workspace wire schema, bump the wire package version and update all consumers.
-
----
-
-## 13. Useful Links
-
-- `README.md` — Chinese-language quick start and architecture diagram
-- `spec.md` / `docs/UI_SPEC.md` — Web UI redesign spec (Chinese)
-- `cli/ARCHITECTURE.md` — full CLI architecture
-- `cli/AGENTS.md` — CLI agent guide
-- `server/CLAUDE.md` — server agent guide
-- `app/CLAUDE.md` — app agent guide
-- `packages/wire/README.md` — wire protocol specification
+- There is **no root test script** — run tests per workspace.
+- Don't assume tsconfig paths work in tests: only the server uses `vite-tsconfig-paths`; the app wires the alias manually in `vitest.config.ts`.
+- Coverage shape: app (sync/reducer/encryption/utils) and CLI config/args logic are well tested; the server has only ~9 test files — no auth, encryption, or socket tests — so verify server changes with `server/scripts/test-business.sh` or a live `standalone:dev` smoke run.
